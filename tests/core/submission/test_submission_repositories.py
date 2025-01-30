@@ -1,4 +1,4 @@
-# Copyright 2023 Avaiga Private Limited
+# Copyright 2021-2025 Avaiga Private Limited
 #
 # Licensed under the Apache License, Version 2.0 (the "License"); you may not use this file except in compliance with
 # the License. You may obtain a copy of the License at
@@ -13,61 +13,49 @@ import os
 
 import pytest
 
-from src.taipy.core.data._data_manager_factory import _DataManagerFactory
-from src.taipy.core.exceptions import ModelNotFound
-from src.taipy.core.job._job_manager_factory import _JobManagerFactory
-from src.taipy.core.submission._submission_manager_factory import _SubmissionManagerFactory
-from src.taipy.core.submission.submission import Submission
-from src.taipy.core.task._task_manager_factory import _TaskManagerFactory
-from src.taipy.core.task.task import Task
-from taipy.config.config import Config
-from tests.core.conftest import init_sql_repo
-
-
-def configure_fs_repo():
-    Config.configure_core(repository_type="default")
-
-
-def configure_sql_repo():
-    init_sql_repo
+from taipy.common.config import Config
+from taipy.core.data._data_manager_factory import _DataManagerFactory
+from taipy.core.exceptions import ModelNotFound
+from taipy.core.job._job_manager_factory import _JobManagerFactory
+from taipy.core.submission._submission_manager_factory import _SubmissionManagerFactory
+from taipy.core.submission.submission import Submission
+from taipy.core.task._task_manager_factory import _TaskManagerFactory
+from taipy.core.task.task import Task
 
 
 class TestSubmissionRepository:
-    @pytest.mark.parametrize("configure_repo", [configure_fs_repo, configure_sql_repo])
-    def test_save_and_load(self, data_node, job, configure_repo):
-        configure_repo()
-
+    def test_save_and_load(self, data_node, job):
         _DataManagerFactory._build_manager()._repository._save(data_node)
         task = Task("task_config_id", {}, print, [data_node], [data_node])
         _TaskManagerFactory._build_manager()._repository._save(task)
         job._task = task
         _JobManagerFactory._build_manager()._repository._save(job)
 
-        submission = Submission(task.id, task._ID_PREFIX)
+        submission = Submission(
+            task.id, task._ID_PREFIX, task.config_id, properties={"debug": True, "log": "log_file", "retry_note": 5}
+        )
         submission_repository = _SubmissionManagerFactory._build_manager()._repository
         submission_repository._save(submission)
         submission.jobs = [job]
 
         obj = submission_repository._load(submission.id)
         assert isinstance(obj, Submission)
+        assert obj.entity_id == task.id
+        assert obj.entity_type == task._ID_PREFIX
+        assert obj.entity_config_id == task.config_id
+        assert obj.properties == {"debug": True, "log": "log_file", "retry_note": 5}
 
-    @pytest.mark.parametrize("configure_repo", [configure_fs_repo, configure_sql_repo])
-    def test_exists(self, configure_repo):
-        configure_repo()
-
-        submission = Submission("entity_id", "ENTITY_TYPE")
+    def test_exists(self):
+        submission = Submission("entity_id", "ENTITY_TYPE", "entity_config_id")
         submission_repository = _SubmissionManagerFactory._build_manager()._repository
         submission_repository._save(submission)
 
         assert submission_repository._exists(submission.id)
         assert not submission_repository._exists("not-existed-submission")
 
-    @pytest.mark.parametrize("configure_repo", [configure_fs_repo, configure_sql_repo])
-    def test_load_all(self, configure_repo):
-        configure_repo()
-
+    def test_load_all(self):
         repository = _SubmissionManagerFactory._build_manager()._repository
-        submission = Submission("entity_id", "ENTITY_TYPE")
+        submission = Submission("entity_id", "ENTITY_TYPE", "entity_config_id")
         for i in range(10):
             submission.id = f"submission-{i}"
             repository._save(submission)
@@ -75,13 +63,10 @@ class TestSubmissionRepository:
 
         assert len(submissions) == 10
 
-    @pytest.mark.parametrize("configure_repo", [configure_fs_repo, configure_sql_repo])
-    def test_delete(self, configure_repo):
-        configure_repo()
-
+    def test_delete(self):
         repository = _SubmissionManagerFactory._build_manager()._repository
 
-        submission = Submission("entity_id", "ENTITY_TYPE")
+        submission = Submission("entity_id", "ENTITY_TYPE", "entity_config_id")
         repository._save(submission)
 
         repository._delete(submission.id)
@@ -89,12 +74,9 @@ class TestSubmissionRepository:
         with pytest.raises(ModelNotFound):
             repository._load(submission.id)
 
-    @pytest.mark.parametrize("configure_repo", [configure_fs_repo, configure_sql_repo])
-    def test_delete_all(self, configure_repo):
-        configure_repo()
-
+    def test_delete_all(self):
         submission_repository = _SubmissionManagerFactory._build_manager()._repository
-        submission = Submission("entity_id", "ENTITY_TYPE")
+        submission = Submission("entity_id", "ENTITY_TYPE", "entity_config_id")
 
         for i in range(10):
             submission.id = f"submission-{i}"
@@ -106,11 +88,8 @@ class TestSubmissionRepository:
 
         assert len(submission_repository._load_all()) == 0
 
-    @pytest.mark.parametrize("configure_repo", [configure_fs_repo, configure_sql_repo])
-    def test_delete_many(self, configure_repo):
-        configure_repo()
-
-        submission = Submission("entity_id", "ENTITY_TYPE")
+    def test_delete_many(self):
+        submission = Submission("entity_id", "ENTITY_TYPE", "entity_config_id")
         submission_repository = _SubmissionManagerFactory._build_manager()._repository
 
         for i in range(10):
@@ -124,13 +103,10 @@ class TestSubmissionRepository:
 
         assert len(submission_repository._load_all()) == 7
 
-    @pytest.mark.parametrize("configure_repo", [configure_fs_repo, configure_sql_repo])
-    def test_delete_by(self, configure_repo):
-        configure_repo()
-
+    def test_delete_by(self):
         # Create 5 entities with version 1.0 and 5 entities with version 2.0
         submission_repository = _SubmissionManagerFactory._build_manager()._repository
-        submission = Submission("entity_id", "ENTITY_TYPE")
+        submission = Submission("entity_id", "ENTITY_TYPE", "entity_config_id")
 
         for i in range(10):
             submission.id = f"submission-{i}"
@@ -143,12 +119,9 @@ class TestSubmissionRepository:
 
         assert len(submission_repository._load_all()) == 5
 
-    @pytest.mark.parametrize("configure_repo", [configure_fs_repo, configure_sql_repo])
-    def test_search(self, configure_repo):
-        configure_repo()
-
+    def test_search(self):
         submission_repository = _SubmissionManagerFactory._build_manager()._repository
-        submission = Submission("entity_id", "ENTITY_TYPE", version="random_version_number")
+        submission = Submission("entity_id", "ENTITY_TYPE", "entity_config_id", version="random_version_number")
         for i in range(10):
             submission.id = f"submission-{i}"
             submission_repository._save(submission)
@@ -165,12 +138,9 @@ class TestSubmissionRepository:
 
         assert submission_repository._search("id", "submission-2", filters=[{"version": "non_existed_version"}]) == []
 
-    @pytest.mark.parametrize("configure_repo", [configure_fs_repo, configure_sql_repo])
-    def test_export(self, tmpdir, configure_repo):
-        configure_repo()
-
+    def test_export(self, tmpdir):
         repository = _SubmissionManagerFactory._build_manager()._repository
-        submission = Submission("entity_id", "ENTITY_TYPE")
+        submission = Submission("entity_id", "ENTITY_TYPE", "entity_config_id")
         repository._save(submission)
 
         repository._export(submission.id, tmpdir.strpath)

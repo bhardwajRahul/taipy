@@ -1,4 +1,4 @@
-# Copyright 2023 Avaiga Private Limited
+# Copyright 2021-2025 Avaiga Private Limited
 #
 # Licensed under the Apache License, Version 2.0 (the "License"); you may not use this file except in compliance with
 # the License. You may obtain a copy of the License at
@@ -14,26 +14,27 @@ import random
 import string
 from functools import partial
 from time import sleep
+from typing import cast
 from unittest import mock
 
 import pytest
 
-from src.taipy.core._orchestrator._dispatcher._job_dispatcher import _JobDispatcher
-from src.taipy.core._orchestrator._orchestrator_factory import _OrchestratorFactory
-from src.taipy.core.config.job_config import JobConfig
-from src.taipy.core.data._data_manager import _DataManager
-from src.taipy.core.data._data_manager_factory import _DataManagerFactory
-from src.taipy.core.data.in_memory import InMemoryDataNode
-from src.taipy.core.exceptions.exceptions import JobNotDeletedException
-from src.taipy.core.job._job_manager import _JobManager
-from src.taipy.core.job.job_id import JobId
-from src.taipy.core.job.status import Status
-from src.taipy.core.scenario.scenario import Scenario
-from src.taipy.core.submission._submission_manager_factory import _SubmissionManagerFactory
-from src.taipy.core.task._task_manager import _TaskManager
-from src.taipy.core.task.task import Task
-from taipy.config.common.scope import Scope
-from taipy.config.config import Config
+from taipy.common.config import Config
+from taipy.common.config.common.scope import Scope
+from taipy.core._orchestrator._dispatcher import _StandaloneJobDispatcher
+from taipy.core._orchestrator._orchestrator_factory import _OrchestratorFactory
+from taipy.core.config.job_config import JobConfig
+from taipy.core.data._data_manager import _DataManager
+from taipy.core.data._data_manager_factory import _DataManagerFactory
+from taipy.core.data.in_memory import InMemoryDataNode
+from taipy.core.exceptions.exceptions import JobNotDeletedException
+from taipy.core.job._job_manager import _JobManager
+from taipy.core.job.job_id import JobId
+from taipy.core.job.status import Status
+from taipy.core.scenario.scenario import Scenario
+from taipy.core.submission._submission_manager_factory import _SubmissionManagerFactory
+from taipy.core.task._task_manager import _TaskManager
+from taipy.core.task.task import Task
 from tests.core.utils import assert_true_after_time
 
 
@@ -50,8 +51,6 @@ def test_create_jobs():
     Config.configure_job_executions(mode=JobConfig._DEVELOPMENT_MODE)
     task = _create_task(multiply, name="get_job")
 
-    _OrchestratorFactory._build_dispatcher()
-
     job_1 = _JobManager._create(task, [print], "submit_id", "secnario_id", True)
     assert _JobManager._get(job_1.id) == job_1
     assert job_1.is_submitted()
@@ -60,6 +59,7 @@ def test_create_jobs():
     assert job_1.submit_id == "submit_id"
     assert job_1.submit_entity_id == "secnario_id"
     assert job_1.force
+    assert _JobManager._is_editable(job_1)
 
     job_2 = _JobManager._create(task, [print], "submit_id_1", "secnario_id", False)
     assert _JobManager._get(job_2.id) == job_2
@@ -69,6 +69,7 @@ def test_create_jobs():
     assert job_2.submit_id == "submit_id_1"
     assert job_2.submit_entity_id == "secnario_id"
     assert not job_2.force
+    assert _JobManager._is_editable(job_2)
 
 
 def test_get_job():
@@ -76,13 +77,11 @@ def test_get_job():
 
     task = _create_task(multiply, name="get_job")
 
-    _OrchestratorFactory._build_dispatcher()
-
-    job_1 = _OrchestratorFactory._orchestrator.submit_task(task)
+    job_1 = _OrchestratorFactory._orchestrator.submit_task(task).jobs[0]
     assert _JobManager._get(job_1.id) == job_1
     assert _JobManager._get(job_1.id).submit_entity_id == task.id
 
-    job_2 = _OrchestratorFactory._orchestrator.submit_task(task)
+    job_2 = _OrchestratorFactory._orchestrator.submit_task(task).jobs[0]
     assert job_1 != job_2
     assert _JobManager._get(job_1.id).id == job_1.id
     assert _JobManager._get(job_2.id).id == job_2.id
@@ -95,19 +94,17 @@ def test_get_latest_job():
     task = _create_task(multiply, name="get_latest_job")
     task_2 = _create_task(multiply, name="get_latest_job_2")
 
-    _OrchestratorFactory._build_dispatcher()
-
-    job_1 = _OrchestratorFactory._orchestrator.submit_task(task)
+    job_1 = _OrchestratorFactory._orchestrator.submit_task(task).jobs[0]
     assert _JobManager._get_latest(task) == job_1
     assert _JobManager._get_latest(task_2) is None
 
     sleep(0.01)  # Comparison is based on time, precision on Windows is not enough important
-    job_2 = _OrchestratorFactory._orchestrator.submit_task(task_2)
+    job_2 = _OrchestratorFactory._orchestrator.submit_task(task_2).jobs[0]
     assert _JobManager._get_latest(task).id == job_1.id
     assert _JobManager._get_latest(task_2).id == job_2.id
 
     sleep(0.01)  # Comparison is based on time, precision on Windows is not enough important
-    job_1_bis = _OrchestratorFactory._orchestrator.submit_task(task)
+    job_1_bis = _OrchestratorFactory._orchestrator.submit_task(task).jobs[0]
     assert _JobManager._get_latest(task).id == job_1_bis.id
     assert _JobManager._get_latest(task_2).id == job_2.id
 
@@ -121,10 +118,8 @@ def test_get_jobs():
 
     task = _create_task(multiply, name="get_all_jobs")
 
-    _OrchestratorFactory._build_dispatcher()
-
-    job_1 = _OrchestratorFactory._orchestrator.submit_task(task)
-    job_2 = _OrchestratorFactory._orchestrator.submit_task(task)
+    job_1 = _OrchestratorFactory._orchestrator.submit_task(task).jobs[0]
+    job_2 = _OrchestratorFactory._orchestrator.submit_task(task).jobs[0]
 
     assert {job.id for job in _JobManager._get_all()} == {job_1.id, job_2.id}
 
@@ -134,24 +129,13 @@ def test_delete_job():
 
     task = _create_task(multiply, name="delete_job")
 
-    _OrchestratorFactory._build_dispatcher()
-
-    job_1 = _OrchestratorFactory._orchestrator.submit_task(task)
-    job_2 = _OrchestratorFactory._orchestrator.submit_task(task)
+    job_1 = _OrchestratorFactory._orchestrator.submit_task(task).jobs[0]
+    job_2 = _OrchestratorFactory._orchestrator.submit_task(task).jobs[0]
 
     _JobManager._delete(job_1)
 
     assert [job.id for job in _JobManager._get_all()] == [job_2.id]
     assert _JobManager._get(job_1.id) is None
-
-
-m = multiprocessing.Manager()
-lock = m.Lock()
-
-
-def inner_lock_multiply(nb1: float, nb2: float):
-    with lock:
-        return multiply(1 or nb1, 2 or nb2)
 
 
 def test_raise_when_trying_to_delete_unfinished_job():
@@ -168,11 +152,10 @@ def test_raise_when_trying_to_delete_unfinished_job():
     task = Task(
         "task_config_1", {}, partial(lock_multiply, lock), [dn_1, dn_2], [dn_3], id="raise_when_delete_unfinished"
     )
-    _OrchestratorFactory._build_dispatcher()
+    dispatcher = cast(_StandaloneJobDispatcher, _OrchestratorFactory._build_dispatcher())
     with lock:
-        job = _OrchestratorFactory._orchestrator.submit_task(task)
-
-        assert_true_after_time(lambda: len(_JobDispatcher._dispatched_processes) == 1)
+        job = _OrchestratorFactory._orchestrator.submit_task(task)._jobs[0]
+        assert_true_after_time(lambda: dispatcher._nb_available_workers == 1)
         assert_true_after_time(job.is_running)
         with pytest.raises(JobNotDeletedException):
             _JobManager._delete(job)
@@ -198,7 +181,7 @@ def test_force_deleting_unfinished_job():
     )
     _OrchestratorFactory._build_dispatcher()
     with lock:
-        job = _OrchestratorFactory._orchestrator.submit_task(task)
+        job = _OrchestratorFactory._orchestrator.submit_task(task)._jobs[0]
         assert_true_after_time(job.is_running)
         with pytest.raises(JobNotDeletedException):
             _JobManager._delete(job, force=False)
@@ -211,52 +194,50 @@ def test_cancel_single_job():
 
     task = _create_task(multiply, name="cancel_single_job")
 
-    _OrchestratorFactory._build_dispatcher()
+    dispatcher = cast(_StandaloneJobDispatcher, _OrchestratorFactory._build_dispatcher())
 
-    assert_true_after_time(_OrchestratorFactory._dispatcher.is_running)
-    _OrchestratorFactory._dispatcher.stop()
-    assert_true_after_time(lambda: not _OrchestratorFactory._dispatcher.is_running())
-
-    job = _OrchestratorFactory._orchestrator.submit_task(task)
+    assert_true_after_time(dispatcher.is_running)
+    dispatcher.stop()
+    assert_true_after_time(lambda: not dispatcher.is_running())
+    job = _OrchestratorFactory._orchestrator.submit_task(task).jobs[0]
 
     assert_true_after_time(job.is_pending)
-    assert_true_after_time(lambda: len(_JobDispatcher._dispatched_processes) == 0)
+    assert_true_after_time(lambda: dispatcher._nb_available_workers == 1)
     _JobManager._cancel(job.id)
-    assert_true_after_time(job.is_canceled)
     assert_true_after_time(job.is_canceled)
 
 
 @mock.patch(
-    "src.taipy.core._orchestrator._orchestrator._Orchestrator._orchestrate_job_to_run_or_block",
+    "taipy.core._orchestrator._orchestrator._Orchestrator._orchestrate_job_to_run_or_block",
     return_value="orchestrated_job",
 )
-@mock.patch("src.taipy.core._orchestrator._orchestrator._Orchestrator._cancel_jobs")
+@mock.patch("taipy.core._orchestrator._orchestrator._Orchestrator._cancel_jobs")
 def test_cancel_canceled_abandoned_failed_jobs(cancel_jobs, orchestrated_job):
     Config.configure_job_executions(mode=JobConfig._STANDALONE_MODE, max_nb_of_workers=1)
 
     task = _create_task(multiply, name="test_cancel_canceled_abandoned_failed_jobs")
 
-    _OrchestratorFactory._build_dispatcher()
+    dispatcher = _OrchestratorFactory._build_dispatcher()
 
-    assert_true_after_time(_OrchestratorFactory._dispatcher.is_running)
-    _OrchestratorFactory._dispatcher.stop()
-    assert_true_after_time(lambda: not _OrchestratorFactory._dispatcher.is_running())
+    assert_true_after_time(dispatcher.is_running)
+    dispatcher.stop()
+    assert_true_after_time(lambda: not dispatcher.is_running())
 
-    job = _OrchestratorFactory._orchestrator.submit_task(task)
+    job = _OrchestratorFactory._orchestrator.submit_task(task).jobs[0]
     job.canceled()
     assert job.is_canceled()
     _JobManager._cancel(job)
     cancel_jobs.assert_not_called()
     assert job.is_canceled()
 
-    job = _OrchestratorFactory._orchestrator.submit_task(task)
+    job = _OrchestratorFactory._orchestrator.submit_task(task).jobs[0]
     job.failed()
     assert job.is_failed()
     _JobManager._cancel(job)
     cancel_jobs.assert_not_called()
     assert job.is_failed()
 
-    job = _OrchestratorFactory._orchestrator.submit_task(task)
+    job = _OrchestratorFactory._orchestrator.submit_task(task).jobs[0]
     job.abandoned()
     assert job.is_abandoned()
     _JobManager._cancel(job)
@@ -265,35 +246,35 @@ def test_cancel_canceled_abandoned_failed_jobs(cancel_jobs, orchestrated_job):
 
 
 @mock.patch(
-    "src.taipy.core._orchestrator._orchestrator._Orchestrator._orchestrate_job_to_run_or_block",
+    "taipy.core._orchestrator._orchestrator._Orchestrator._orchestrate_job_to_run_or_block",
     return_value="orchestrated_job",
 )
-@mock.patch("src.taipy.core.job.job.Job.canceled")
+@mock.patch("taipy.core.job.job.Job.canceled")
 def test_cancel_completed_skipped_jobs(cancel_jobs, orchestrated_job):
     Config.configure_job_executions(mode=JobConfig._STANDALONE_MODE, max_nb_of_workers=1)
     task = _create_task(multiply, name="cancel_single_job")
 
-    _OrchestratorFactory._build_dispatcher()
+    dispatcher = _OrchestratorFactory._build_dispatcher()
 
-    assert_true_after_time(_OrchestratorFactory._dispatcher.is_running)
-    _OrchestratorFactory._dispatcher.stop()
-    assert_true_after_time(lambda: not _OrchestratorFactory._dispatcher.is_running())
+    assert_true_after_time(dispatcher.is_running)
+    dispatcher.stop()
+    assert_true_after_time(lambda: not dispatcher.is_running())
 
-    job = _OrchestratorFactory._orchestrator.submit_task(task)
+    job = _OrchestratorFactory._orchestrator.submit_task(task).jobs[0]
     job.completed()
     assert job.is_completed()
     cancel_jobs.assert_not_called()
     _JobManager._cancel(job)
     assert job.is_completed()
 
-    job = _OrchestratorFactory._orchestrator.submit_task(task)
+    job = _OrchestratorFactory._orchestrator.submit_task(task).jobs[0]
     job.failed()
     assert job.is_failed()
     cancel_jobs.assert_not_called()
     _JobManager._cancel(job)
     assert job.is_failed()
 
-    job = _OrchestratorFactory._orchestrator.submit_task(task)
+    job = _OrchestratorFactory._orchestrator.submit_task(task).jobs[0]
     job.skipped()
     assert job.is_skipped()
     cancel_jobs.assert_not_called()
@@ -315,22 +296,19 @@ def test_cancel_single_running_job():
     dnm._set(dn_3)
     task = Task("task_config_1", {}, partial(lock_multiply, lock), [dn_1, dn_2], [dn_3], id="cancel_single_job")
 
-    _OrchestratorFactory._build_dispatcher()
+    dispatcher = cast(_StandaloneJobDispatcher, _OrchestratorFactory._build_dispatcher(force_restart=True))
 
-    assert_true_after_time(_OrchestratorFactory._dispatcher.is_running)
-    assert_true_after_time(lambda: _OrchestratorFactory._dispatcher._nb_available_workers == 2)
+    assert_true_after_time(dispatcher.is_running)
+    assert_true_after_time(lambda: dispatcher._nb_available_workers == 2)
 
     with lock:
-        job = _OrchestratorFactory._orchestrator.submit_task(task)
-
-        assert_true_after_time(lambda: len(_JobDispatcher._dispatched_processes) == 1)
-        assert_true_after_time(lambda: _OrchestratorFactory._dispatcher._nb_available_workers == 1)
+        job = _OrchestratorFactory._orchestrator.submit_task(task)._jobs[0]
         assert_true_after_time(job.is_running)
+        assert dispatcher._nb_available_workers == 1
         _JobManager._cancel(job)
         assert_true_after_time(job.is_running)
-    assert_true_after_time(lambda: len(_JobDispatcher._dispatched_processes) == 0)
-    assert_true_after_time(lambda: _OrchestratorFactory._dispatcher._nb_available_workers == 2)
     assert_true_after_time(job.is_completed)
+    assert dispatcher._nb_available_workers == 2
 
 
 def test_cancel_subsequent_jobs():
@@ -339,6 +317,7 @@ def test_cancel_subsequent_jobs():
     orchestrator = _OrchestratorFactory._orchestrator
     submission_manager = _SubmissionManagerFactory._build_manager()
 
+    m = multiprocessing.Manager()
     lock_0 = m.Lock()
 
     dn_1 = InMemoryDataNode("dn_config_1", Scope.SCENARIO, properties={"default_data": 1})
@@ -350,8 +329,8 @@ def test_cancel_subsequent_jobs():
     task_3 = Task("task_config_3", {}, print, [dn_4], id="task_3")
 
     # Can't get tasks under 1 scenario due to partial not serializable
-    submission_1 = submission_manager._create("scenario_id", Scenario._ID_PREFIX)
-    submission_2 = submission_manager._create("scenario_id", Scenario._ID_PREFIX)
+    submission_1 = submission_manager._create("scenario_id", Scenario._ID_PREFIX, "scenario_config_id")
+    submission_2 = submission_manager._create("scenario_id", Scenario._ID_PREFIX, "scenario_config_id")
 
     _DataManager._set(dn_1)
     _DataManager._set(dn_2)
@@ -431,7 +410,11 @@ def test_cancel_subsequent_jobs():
 def test_is_deletable():
     assert len(_JobManager._get_all()) == 0
     task = _create_task(print, 0, "task")
-    job = _OrchestratorFactory._orchestrator.submit_task(task)
+    job = _OrchestratorFactory._orchestrator.submit_task(task).jobs[0]
+
+    rc = _JobManager._is_deletable("some_job")
+    assert not rc
+    assert "Entity some_job does not exist in the repository." in rc.reasons
 
     assert job.is_completed()
     assert _JobManager._is_deletable(job)
@@ -484,7 +467,7 @@ def _create_task(function, nb_outputs=1, name=None):
     output_dn_configs = [
         Config.configure_data_node(f"output{i}", "pickle", Scope.SCENARIO, default_data=0) for i in range(nb_outputs)
     ]
-    _DataManager._bulk_get_or_create({cfg for cfg in output_dn_configs})
+    _DataManager._bulk_get_or_create(output_dn_configs)
     name = name or "".join(random.choice(string.ascii_lowercase) for _ in range(10))
     task_config = Config.configure_task(
         id=name,

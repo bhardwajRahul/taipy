@@ -1,4 +1,4 @@
-# Copyright 2023 Avaiga Private Limited
+# Copyright 2021-2025 Avaiga Private Limited
 #
 # Licensed under the Apache License, Version 2.0 (the "License"); you may not use this file except in compliance with
 # the License. You may obtain a copy of the License at
@@ -10,14 +10,14 @@
 # specific language governing permissions and limitations under the License.
 
 from copy import copy
-from datetime import timedelta
+from datetime import datetime, timedelta
 
 import pytest
 
-from src.taipy.core.config.data_node_config import DataNodeConfig
-from taipy.config import Config
-from taipy.config.checker.issue_collector import IssueCollector
-from taipy.config.common.scope import Scope
+from taipy.common.config import Config
+from taipy.common.config.checker.issue_collector import IssueCollector
+from taipy.common.config.common.scope import Scope
+from taipy.core.config.data_node_config import DataNodeConfig
 
 
 class MyCustomClass:
@@ -44,6 +44,48 @@ class TestDataNodeConfigChecker:
         Config._collector = IssueCollector()
         Config.check()
         assert len(Config._collector.errors) == 0
+
+    def test_check_config_id_is_different_from_task_and_scenario_attributes(self, caplog):
+        Config._collector = IssueCollector()
+        config = Config._applied_config
+        Config._compile_configs()
+        Config.check()
+        assert len(Config._collector.errors) == 0
+
+        config._sections[DataNodeConfig.name]["new"] = copy(config._sections[DataNodeConfig.name]["default"])
+
+        for conflict_id in [
+            "function",
+            "input",
+            "output",
+            "parent_ids",
+            "scope",
+            "skippable",
+            "additional_data_nodes",
+            "config_id",
+            "creation_date",
+            "cycle",
+            "data_nodes",
+            "is_primary",
+            "name",
+            "owner_id",
+            "properties",
+            "sequences",
+            "subscribers",
+            "tags",
+            "tasks",
+            "version",
+        ]:
+            config._sections[DataNodeConfig.name]["new"].id = conflict_id
+
+            with pytest.raises(SystemExit):
+                Config._collector = IssueCollector()
+                Config.check()
+            assert len(Config._collector.errors) == 1
+            expected_error_message = (
+                f"The id of the DataNodeConfig `new` is overlapping with the attribute `{conflict_id}` of a"
+            )
+            assert expected_error_message in caplog.text
 
     def test_check_if_entity_property_key_used_is_predefined(self, caplog):
         Config._collector = IssueCollector()
@@ -88,7 +130,7 @@ class TestDataNodeConfigChecker:
         assert len(Config._collector.errors) == 1
         expected_error_message = (
             "`storage_type` field of DataNodeConfig `new` must be either csv, sql_table,"
-            " sql, mongo_collection, pickle, excel, generic, json, parquet, or in_memory."
+            " sql, mongo_collection, pickle, excel, generic, json, parquet, s3_object, or in_memory."
             ' Current value of property `storage_type` is "bar".'
         )
         assert expected_error_message in caplog.text
@@ -167,6 +209,19 @@ class TestDataNodeConfigChecker:
         expected_error_messages = [
             "DataNodeConfig `new` is missing the required property `db_name` for type `mongo_collection`.",
             "DataNodeConfig `new` is missing the required property `collection_name` for type `mongo_collection`.",
+        ]
+        assert all(message in caplog.text for message in expected_error_messages)
+
+        config._sections[DataNodeConfig.name]["new"].storage_type = "s3_object"
+        with pytest.raises(SystemExit):
+            Config._collector = IssueCollector()
+            Config.check()
+        assert len(Config._collector.errors) == 4
+        expected_error_messages = [
+            "DataNodeConfig `new` is missing the required property `aws_access_key` for type `s3_object`.",
+            "DataNodeConfig `new` is missing the required property `aws_secret_access_key` for type `s3_object`.",
+            "DataNodeConfig `new` is missing the required property `aws_s3_bucket_name` for type `s3_object`.",
+            "DataNodeConfig `new` is missing the required property `aws_s3_object_key` for type `s3_object`.",
         ]
         assert all(message in caplog.text for message in expected_error_messages)
 
@@ -353,6 +408,17 @@ class TestDataNodeConfigChecker:
         Config.check()
         assert len(Config._collector.errors) == 0
 
+        config._sections[DataNodeConfig.name]["new"].storage_type = "s3_object"
+        config._sections[DataNodeConfig.name]["new"].properties = {
+            "aws_access_key": "access_key",
+            "aws_secret_access_key": "secret_acces_key",
+            "aws_s3_bucket_name": "s3_bucket_name",
+            "aws_s3_object_key": "s3_object_key",
+        }
+        Config._collector = IssueCollector()
+        Config.check()
+        assert len(Config._collector.errors) == 0
+
         config._sections[DataNodeConfig.name]["new"].storage_type = "excel"
         Config._collector = IssueCollector()
         Config.check()
@@ -447,12 +513,12 @@ class TestDataNodeConfigChecker:
             Config.check()
         assert len(Config._collector.errors) == 2
         expected_error_message_1 = (
-            "`write_query_builder` of DataNodeConfig `new` must be populated with a Callable function."
+            "`write_query_builder` of DataNodeConfig `new` must be populated with a typing.Callable."
             " Current value of property `write_query_builder` is 1."
         )
         assert expected_error_message_1 in caplog.text
         expected_error_message_2 = (
-            "`append_query_builder` of DataNodeConfig `new` must be populated with a Callable function."
+            "`append_query_builder` of DataNodeConfig `new` must be populated with a typing.Callable."
             " Current value of property `append_query_builder` is 2."
         )
         assert expected_error_message_2 in caplog.text
@@ -464,7 +530,7 @@ class TestDataNodeConfigChecker:
             Config.check()
         assert len(Config._collector.errors) == 1
         expected_error_messages = [
-            "`write_fct` of DataNodeConfig `new` must be populated with a Callable function. Current value"
+            "`write_fct` of DataNodeConfig `new` must be populated with a typing.Callable. Current value"
             " of property `write_fct` is 12.",
         ]
         assert all(message in caplog.text for message in expected_error_messages)
@@ -476,7 +542,7 @@ class TestDataNodeConfigChecker:
             Config.check()
         assert len(Config._collector.errors) == 1
         expected_error_messages = [
-            "`read_fct` of DataNodeConfig `new` must be populated with a Callable function. Current value"
+            "`read_fct` of DataNodeConfig `new` must be populated with a typing.Callable. Current value"
             " of property `read_fct` is 5.",
         ]
         assert all(message in caplog.text for message in expected_error_messages)
@@ -488,9 +554,9 @@ class TestDataNodeConfigChecker:
             Config.check()
         assert len(Config._collector.errors) == 2
         expected_error_messages = [
-            "`write_fct` of DataNodeConfig `new` must be populated with a Callable function. Current value"
+            "`write_fct` of DataNodeConfig `new` must be populated with a typing.Callable. Current value"
             " of property `write_fct` is 9.",
-            "`read_fct` of DataNodeConfig `new` must be populated with a Callable function. Current value"
+            "`read_fct` of DataNodeConfig `new` must be populated with a typing.Callable. Current value"
             " of property `read_fct` is 5.",
         ]
         assert all(message in caplog.text for message in expected_error_messages)
@@ -515,6 +581,22 @@ class TestDataNodeConfigChecker:
         Config.check()
         assert len(Config._collector.errors) == 0
 
+        config._sections[DataNodeConfig.name]["new"].storage_type = "generic"
+        config._sections[DataNodeConfig.name]["new"].properties = {"write_fct": lambda x: x, "read_fct": lambda y: y}
+        with pytest.raises(SystemExit):
+            Config._collector = IssueCollector()
+            Config.check()
+        assert len(Config._collector.errors) == 2
+        expected_error_messages = [
+            "`write_fct` of DataNodeConfig `new` must be populated with a serializable typing.Callable function but"
+            " not a lambda. Current value of property `write_fct` is <function TestDataNodeConfigChecker."
+            "test_check_callable_properties.<locals>.<lambda>",
+            "`read_fct` of DataNodeConfig `new` must be populated with a serializable typing.Callable function but"
+            " not a lambda. Current value of property `read_fct` is <function TestDataNodeConfigChecker."
+            "test_check_callable_properties.<locals>.<lambda>",
+        ]
+        assert all(message in caplog.text for message in expected_error_messages)
+
     def test_check_read_write_fct_args(self, caplog):
         config = Config._applied_config
         Config._compile_configs()
@@ -534,12 +616,15 @@ class TestDataNodeConfigChecker:
         with pytest.raises(SystemExit):
             Config._collector = IssueCollector()
             Config.check()
-        assert len(Config._collector.errors) == 1
-        expected_error_message = (
+        assert len(Config._collector.errors) == 2
+
+        expected_error_messages = (
+            "`write_fct_args` of DataNodeConfig `default` must be populated with a <class 'list'>."
+            ' Current value of property `write_fct_args` is "foo".',
             "`write_fct_args` field of DataNodeConfig `default` must be populated with a List value."
-            ' Current value of property `write_fct_args` is "foo".'
+            ' Current value of property `write_fct_args` is "foo".',
         )
-        assert expected_error_message in caplog.text
+        assert all(message in caplog.text for message in expected_error_messages)
         config._sections[DataNodeConfig.name]["default"].storage_type = "generic"
         config._sections[DataNodeConfig.name]["default"].properties = {
             "write_fct": print,
@@ -559,12 +644,15 @@ class TestDataNodeConfigChecker:
         with pytest.raises(SystemExit):
             Config._collector = IssueCollector()
             Config.check()
-        assert len(Config._collector.errors) == 1
-        expected_error_message = (
+        assert len(Config._collector.errors) == 2
+
+        expected_error_messages = (
+            "`read_fct_args` of DataNodeConfig `default` must be populated with a <class 'list'>."
+            " Current value of property `read_fct_args` is 1.",
             "`read_fct_args` field of DataNodeConfig `default` must be populated with a List value."
-            " Current value of property `read_fct_args` is 1."
+            " Current value of property `read_fct_args` is 1.",
         )
-        assert expected_error_message in caplog.text
+        assert all(message in caplog.text for message in expected_error_messages)
 
         config._sections[DataNodeConfig.name]["default"].storage_type = "generic"
         config._sections[DataNodeConfig.name]["default"].properties = {
@@ -598,7 +686,7 @@ class TestDataNodeConfigChecker:
             Config.check()
         assert len(Config._collector.errors) == 1
         expected_error_message = (
-            'The `exposed_type` of DataNodeConfig `default` must be either "pandas", "modin"'
+            'The `exposed_type` of DataNodeConfig `default` must be either "pandas"'
             ', "numpy", or a custom type. Current value of property `exposed_type` is "foo".'
         )
         assert expected_error_message in caplog.text
@@ -609,9 +697,10 @@ class TestDataNodeConfigChecker:
         assert len(Config._collector.errors) == 0
 
         config._sections[DataNodeConfig.name]["default"].properties = {"exposed_type": "modin"}
-        Config._collector = IssueCollector()
-        Config.check()
-        assert len(Config._collector.errors) == 0
+        with pytest.raises(SystemExit):
+            Config._collector = IssueCollector()
+            Config.check()
+        assert len(Config._collector.errors) == 1
 
         config._sections[DataNodeConfig.name]["default"].properties = {"exposed_type": "numpy"}
         Config._collector = IssueCollector()
@@ -619,5 +708,69 @@ class TestDataNodeConfigChecker:
         assert len(Config._collector.errors) == 0
 
         config._sections[DataNodeConfig.name]["default"].properties = {"exposed_type": MyCustomClass}
+        Config.check()
+        assert len(Config._collector.errors) == 0
+
+    def test_check_property_types(self, caplog):
+        config = Config._applied_config
+        Config._compile_configs()
+        config._sections[DataNodeConfig.name]["default"].storage_type = "pickle"
+        config._sections[DataNodeConfig.name]["default"].properties = {"default_data": "string"}
+        Config._collector = IssueCollector()
+        Config.check()
+        assert len(Config._collector.errors) == 0
+
+        config._sections[DataNodeConfig.name]["default"].properties = {"default_data": 1}
+        Config._collector = IssueCollector()
+        Config.check()
+        assert len(Config._collector.errors) == 0
+
+        config._sections[DataNodeConfig.name]["default"].properties = {"default_data": 1.}
+        Config._collector = IssueCollector()
+        Config.check()
+        assert len(Config._collector.errors) == 0
+
+        config._sections[DataNodeConfig.name]["default"].properties = {"default_data": True}
+        Config._collector = IssueCollector()
+        Config.check()
+        assert len(Config._collector.errors) == 0
+
+        config._sections[DataNodeConfig.name]["default"].properties = {"default_data": ["foo", "bar"]}
+        Config._collector = IssueCollector()
+        Config.check()
+        assert len(Config._collector.errors) == 0
+
+        config._sections[DataNodeConfig.name]["default"].properties = {"default_data": ("foo", "bar")}
+        Config._collector = IssueCollector()
+        Config.check()
+        assert len(Config._collector.errors) == 0
+
+        config._sections[DataNodeConfig.name]["default"].properties = {"default_data": {"foo": "bar"}}
+        Config._collector = IssueCollector()
+        Config.check()
+        assert len(Config._collector.errors) == 0
+
+        config._sections[DataNodeConfig.name]["default"].properties = {"default_data": {"foo", "bar"}}
+        Config._collector = IssueCollector()
+        Config.check()
+        assert len(Config._collector.errors) == 0
+
+        config._sections[DataNodeConfig.name]["default"].properties = {"default_data": None}
+        Config._collector = IssueCollector()
+        Config.check()
+        assert len(Config._collector.errors) == 0
+
+        config._sections[DataNodeConfig.name]["default"].properties = {"default_data": print}
+        Config._collector = IssueCollector()
+        Config.check()
+        assert len(Config._collector.errors) == 0
+
+        config._sections[DataNodeConfig.name]["default"].properties = {"default_data": datetime(2021, 7, 26)}
+        Config._collector = IssueCollector()
+        Config.check()
+        assert len(Config._collector.errors) == 0
+
+        config._sections[DataNodeConfig.name]["default"].properties = {"default_data": timedelta(7)}
+        Config._collector = IssueCollector()
         Config.check()
         assert len(Config._collector.errors) == 0

@@ -1,4 +1,4 @@
-# Copyright 2023 Avaiga Private Limited
+# Copyright 2021-2025 Avaiga Private Limited
 #
 # Licensed under the Apache License, Version 2.0 (the "License"); you may not use this file except in compliance with
 # the License. You may obtain a copy of the License at
@@ -9,9 +9,9 @@
 # an "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied. See the License for the
 # specific language governing permissions and limitations under the License.
 
-from src.taipy.core.common.warn_if_inputs_not_ready import _warn_if_inputs_not_ready
-from src.taipy.core.data._data_manager_factory import _DataManagerFactory
-from taipy.config import Config
+from taipy.common.config import Config
+from taipy.core.common.warn_if_inputs_not_ready import _warn_if_inputs_not_ready
+from taipy.core.data._data_manager_factory import _DataManagerFactory
 
 
 def test_warn_inputs_all_not_ready(caplog):
@@ -28,7 +28,7 @@ def test_warn_inputs_all_not_ready(caplog):
         f"path : {input_dn.path} "
         for input_dn in data_nodes
     ]
-    assert all([expected_output in stdout for expected_output in expected_outputs])
+    assert all(expected_output in stdout for expected_output in expected_outputs)
 
 
 def test_warn_inputs_all_ready(caplog):
@@ -45,7 +45,7 @@ def test_warn_inputs_all_ready(caplog):
         f"path : {input_dn.path} "
         for input_dn in data_nodes
     ]
-    assert all([expected_output not in stdout for expected_output in not_expected_outputs])
+    assert all(expected_output not in stdout for expected_output in not_expected_outputs)
 
 
 def test_warn_inputs_one_ready(caplog):
@@ -69,8 +69,8 @@ def test_warn_inputs_one_ready(caplog):
         for input_dn in [data_nodes[one]]
     ]
 
-    assert all([expected_output in stdout for expected_output in expected_outputs])
-    assert all([expected_output not in stdout for expected_output in not_expected_outputs])
+    assert all(expected_output in stdout for expected_output in expected_outputs)
+    assert all(expected_output not in stdout for expected_output in not_expected_outputs)
 
 
 def test_submit_task_with_input_dn_wrong_file_path(caplog):
@@ -92,4 +92,4 @@ def test_submit_task_with_input_dn_wrong_file_path(caplog):
         f"path : {input_dn.path} "
         for input_dn in dns
     ]
-    assert all([expected_output in stdout for expected_output in expected_outputs])
+    assert all(expected_output in stdout for expected_output in expected_outputs)

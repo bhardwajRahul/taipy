@@ -1,4 +1,4 @@
-# Copyright 2023 Avaiga Private Limited
+# Copyright 2021-2025 Avaiga Private Limited
 #
 # Licensed under the Apache License, Version 2.0 (the "License"); you may not use this file except in compliance with
 # the License. You may obtain a copy of the License at
@@ -20,7 +20,10 @@ def create_and_submit_scenario(config_id: str, client) -> Dict:
     assert response.status_code == 201
 
     scenario = response.json.get("scenario")
-    assert (set(scenario) - set(json.load(open("tests/rest/json/expected/scenario.json")))) == set()
+    path = "tests/rest/json/expected/scenario.json"
+    with open(path) as file:
+        expected_scenario = json.load(file)
+    assert (set(scenario) - set(expected_scenario)) == set()
 
     response = client.post(url_for("api.scenario_submit", scenario_id=scenario.get("id")))
     assert response.status_code == 200
@@ -32,7 +35,10 @@ def get(url, name, client) -> Dict:
     response = client.get(url)
     returned_data = response.json.get(name)
 
-    assert (set(returned_data) - set(json.load(open(f"tests/rest/json/expected/{name}.json")))) == set()
+    path = f"tests/rest/json/expected/{name}.json"
+    with open(path) as file:
+        expected_data = json.load(file)
+    assert (set(returned_data) - set(expected_data)) == set()
 
     return returned_data
 
@@ -54,7 +60,7 @@ def delete(url, client):
     assert response.status_code == 200
 
 
-def test_end_to_end(client, setup_end_to_end):
+def test_end_to_end(client, setup_end_to_end, init_orchestrator):
     # Create Scenario: Should also create all of its dependencies(sequences, tasks, datanodes, etc)
     scenario = create_and_submit_scenario("scenario", client)
 
@@ -98,3 +104,5 @@ def test_end_to_end(client, setup_end_to_end):
     url_without_slash = url_for("api.scenarios")[:-1]
     get_all(url_with_slash, 1, client)
     get_all(url_without_slash, 1, client)
+
+    init_orchestrator()

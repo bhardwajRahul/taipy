@@ -1,4 +1,4 @@
-# Copyright 2023 Avaiga Private Limited
+# Copyright 2021-2025 Avaiga Private Limited
 #
 # Licensed under the Apache License, Version 2.0 (the "License"); you may not use this file except in compliance with
 # the License. You may obtain a copy of the License at
@@ -11,9 +11,10 @@
 
 import pytest
 
-from src.taipy.core.exceptions.exceptions import InvalidEventAttributeName, InvalidEventOperation
-from src.taipy.core.notification.event import Event, EventEntityType, EventOperation
-from taipy.config.common.frequency import Frequency
+from taipy.common.config.common.frequency import Frequency
+from taipy.core.exceptions.exceptions import InvalidEventAttributeName, InvalidEventOperation
+from taipy.core.notification.event import Event, EventEntityType, EventOperation, _make_event
+from taipy.core.submission.submission import Submission
 
 
 def test_event_creation_cycle():
@@ -360,3 +361,39 @@ def test_event_creation_job():
             operation=EventOperation.SUBMISSION,
             attribute_name="force",
         )
+
+
+def test_event_creation_submission():
+    event_1 = Event(
+        entity_type=EventEntityType.SUBMISSION, entity_id="submission_id", operation=EventOperation.CREATION
+    )
+    assert event_1.creation_date is not None
+    assert event_1.entity_type == EventEntityType.SUBMISSION
+    assert event_1.entity_id == "submission_id"
+    assert event_1.operation == EventOperation.CREATION
+    assert event_1.attribute_name is None
+
+    with pytest.raises(InvalidEventAttributeName):
+        _ = Event(
+            entity_type=EventEntityType.SUBMISSION,
+            entity_id="submission_id",
+            operation=EventOperation.DELETION,
+            attribute_name="force",
+        )
+
+    with pytest.raises(InvalidEventOperation):
+        _ = Event(
+            entity_type=EventEntityType.SUBMISSION, entity_id="submission_id", operation=EventOperation.SUBMISSION
+        )
+
+
+def test_make_event_from_submission():
+    submission = Submission("submission_id", entity_type="task", entity_config_id="task_config_id_1")
+    event = _make_event(submission, EventOperation.CREATION)
+
+    assert event.operation == EventOperation.CREATION
+    assert event.entity_id
+    assert event.entity_type == EventEntityType.SUBMISSION
+    assert event.metadata["origin_entity_id"] == "submission_id"
+    assert event.metadata["origin_entity_type"] == "task"
+    assert event.metadata["origin_entity_config_id"] == "task_config_id_1"

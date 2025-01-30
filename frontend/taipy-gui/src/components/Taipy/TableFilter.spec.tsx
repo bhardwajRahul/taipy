@@ -1,5 +1,5 @@
 /*
- * Copyright 2023 Avaiga Private Limited
+ * Copyright 2021-2025 Avaiga Private Limited
  *
  * Licensed under the Apache License, Version 2.0 (the "License"); you may not use this file except in compliance with
  * the License. You may obtain a copy of the License at
@@ -12,7 +12,7 @@
  */
 
 import React from "react";
-import { render } from "@testing-library/react";
+import { render, screen } from "@testing-library/react";
 import "@testing-library/jest-dom";
 import userEvent from "@testing-library/user-event";
 
@@ -48,44 +48,45 @@ beforeEach(() => {
 });
 
 afterEach(() => {
-    // @ts-ignore
+    // eslint-disable-next-line @typescript-eslint/ban-ts-comment
+    // @ts-expect-error
     delete window.matchMedia;
 });
 
 describe("Table Filter Component", () => {
     it("renders an icon", async () => {
         const { getByTestId } = render(
-            <TableFilter columns={tableColumns} colsOrder={colsOrder} onValidate={jest.fn()} />
+            <TableFilter columns={tableColumns} colsOrder={colsOrder} onValidate={jest.fn()} filteredCount={0} />
         );
         const elt = getByTestId("FilterListIcon");
-        expect(elt.parentElement?.tagName).toBe("BUTTON");
+        expect(elt.parentElement?.parentElement?.tagName).toBe("BUTTON");
     });
     it("renders popover when clicked", async () => {
         const { getByTestId, getAllByText, getAllByTestId } = render(
-            <TableFilter columns={tableColumns} colsOrder={colsOrder} onValidate={jest.fn()} />
+            <TableFilter columns={tableColumns} colsOrder={colsOrder} onValidate={jest.fn()} filteredCount={0} />
         );
         const elt = getByTestId("FilterListIcon");
         await userEvent.click(elt);
         expect(getAllByText("Column")).toHaveLength(2);
-        expect(getAllByText("Action")).toHaveLength(2);
+        expect(getAllByText("Condition")).toHaveLength(2);
         expect(getAllByText("Empty String")).toHaveLength(2);
-        const dropdownElts = getAllByTestId("ArrowDropDownIcon");
-        expect(dropdownElts).toHaveLength(2);
+        const dropdownElements = getAllByTestId("ArrowDropDownIcon");
+        expect(dropdownElements).toHaveLength(2);
         expect(getByTestId("CheckIcon").parentElement).toBeDisabled();
         expect(getByTestId("DeleteIcon").parentElement).toBeDisabled();
     });
     it("behaves on string column", async () => {
         const { getByTestId, getAllByTestId, findByRole, getByText } = render(
-            <TableFilter columns={tableColumns} colsOrder={colsOrder} onValidate={jest.fn()} />
+            <TableFilter columns={tableColumns} colsOrder={colsOrder} onValidate={jest.fn()} filteredCount={0} />
         );
         const elt = getByTestId("FilterListIcon");
         await userEvent.click(elt);
-        const dropdownElts = getAllByTestId("ArrowDropDownIcon");
-        expect(dropdownElts).toHaveLength(2);
-        await userEvent.click(dropdownElts[0].parentElement?.firstElementChild || dropdownElts[0]);
+        const dropdownElements = getAllByTestId("ArrowDropDownIcon");
+        expect(dropdownElements).toHaveLength(2);
+        await userEvent.click(dropdownElements[0].parentElement?.firstElementChild || dropdownElements[0]);
         await findByRole("listbox");
         await userEvent.click(getByText("StringCol"));
-        await userEvent.click(dropdownElts[1].parentElement?.firstElementChild || dropdownElts[1]);
+        await userEvent.click(dropdownElements[1].parentElement?.firstElementChild || dropdownElements[1]);
         await findByRole("listbox");
         await userEvent.click(getByText("contains"));
         const validate = getByTestId("CheckIcon").parentElement;
@@ -93,18 +94,18 @@ describe("Table Filter Component", () => {
     });
     it("behaves on number column", async () => {
         const { getByTestId, getAllByTestId, findByRole, getByText, getAllByText } = render(
-            <TableFilter columns={tableColumns} colsOrder={colsOrder} onValidate={jest.fn()} />
+            <TableFilter columns={tableColumns} colsOrder={colsOrder} onValidate={jest.fn()} filteredCount={0} />
         );
         const elt = getByTestId("FilterListIcon");
         await userEvent.click(elt);
-        const dropdownElts = getAllByTestId("ArrowDropDownIcon");
-        expect(dropdownElts).toHaveLength(2);
-        await userEvent.click(dropdownElts[0].parentElement?.firstElementChild || dropdownElts[0]);
+        const dropdownElements = getAllByTestId("ArrowDropDownIcon");
+        expect(dropdownElements).toHaveLength(2);
+        await userEvent.click(dropdownElements[0].parentElement?.firstElementChild || dropdownElements[0]);
         await findByRole("listbox");
         await userEvent.click(getByText("NumberCol"));
-        await userEvent.click(dropdownElts[1].parentElement?.firstElementChild || dropdownElts[1]);
+        await userEvent.click(dropdownElements[1].parentElement?.firstElementChild || dropdownElements[1]);
         await findByRole("listbox");
-        await userEvent.click(getByText("less equals"));
+        await userEvent.click(getByText("is less than or equal to"));
         const validate = getByTestId("CheckIcon").parentElement;
         expect(validate).toBeDisabled();
         const labels = getAllByText("Number");
@@ -115,24 +116,24 @@ describe("Table Filter Component", () => {
         expect(validate).not.toBeDisabled();
     });
     it("behaves on boolean column", async () => {
-        const { getByTestId, getAllByTestId, findByRole, getByText, getAllByText } = render(
-            <TableFilter columns={tableColumns} colsOrder={colsOrder} onValidate={jest.fn()} />
+        const { getByTestId, getAllByTestId, findByRole, getByText } = render(
+            <TableFilter columns={tableColumns} colsOrder={colsOrder} onValidate={jest.fn()} filteredCount={0} />
         );
         const elt = getByTestId("FilterListIcon");
         await userEvent.click(elt);
-        const dropdownElts = getAllByTestId("ArrowDropDownIcon");
-        expect(dropdownElts).toHaveLength(2);
-        await userEvent.click(dropdownElts[0].parentElement?.firstElementChild || dropdownElts[0]);
+        const dropdownElements = getAllByTestId("ArrowDropDownIcon");
+        expect(dropdownElements).toHaveLength(2);
+        await userEvent.click(dropdownElements[0].parentElement?.firstElementChild || dropdownElements[0]);
         await findByRole("listbox");
         await userEvent.click(getByText("BoolCol"));
-        await userEvent.click(dropdownElts[1].parentElement?.firstElementChild || dropdownElts[1]);
+        await userEvent.click(dropdownElements[1].parentElement?.firstElementChild || dropdownElements[1]);
         await findByRole("listbox");
-        await userEvent.click(getByText("equals"));
+        await userEvent.click(getByText("is"));
         const validate = getByTestId("CheckIcon").parentElement;
         expect(validate).toBeDisabled();
-        const dddElts = getAllByTestId("ArrowDropDownIcon");
-        expect(dddElts).toHaveLength(3);
-        await userEvent.click(dddElts[2].parentElement?.firstElementChild || dddElts[0]);
+        const dddElements = getAllByTestId("ArrowDropDownIcon");
+        expect(dddElements).toHaveLength(3);
+        await userEvent.click(dddElements[2].parentElement?.firstElementChild || dddElements[0]);
         await findByRole("listbox");
         expect(validate).toBeDisabled();
         await userEvent.click(getByText("True"));
@@ -140,99 +141,130 @@ describe("Table Filter Component", () => {
     });
     it("behaves on date column", async () => {
         const { getByTestId, getAllByTestId, findByRole, getByText, getByPlaceholderText } = render(
-                <TableFilter columns={tableColumns} colsOrder={colsOrder} onValidate={jest.fn()} />
+            <TableFilter columns={tableColumns} colsOrder={colsOrder} onValidate={jest.fn()} filteredCount={0} />
         );
         const elt = getByTestId("FilterListIcon");
         await userEvent.click(elt);
-        const dropdownElts = getAllByTestId("ArrowDropDownIcon");
-        expect(dropdownElts).toHaveLength(2);
-        await userEvent.click(dropdownElts[0].parentElement?.firstElementChild || dropdownElts[0]);
+        const dropdownElements = getAllByTestId("ArrowDropDownIcon");
+        expect(dropdownElements).toHaveLength(2);
+        await userEvent.click(dropdownElements[0].parentElement?.firstElementChild || dropdownElements[0]);
         await findByRole("listbox");
         await userEvent.click(getByText("DateCol"));
-        await userEvent.click(dropdownElts[1].parentElement?.firstElementChild || dropdownElts[1]);
+        await userEvent.click(dropdownElements[1].parentElement?.firstElementChild || dropdownElements[1]);
         await findByRole("listbox");
-        await userEvent.click(getByText("before equal"));
+        await userEvent.click(getByText("is on or before"));
         const validate = getByTestId("CheckIcon").parentElement;
         expect(validate).toBeDisabled();
         const input = getByPlaceholderText("YYYY/MM/DD");
-        await userEvent.click(input);
-        await userEvent.type(input, "{ArrowLeft}{ArrowLeft}{ArrowLeft}2020/11/11", {delay: 1});
+        await userEvent.type(input, "{ArrowLeft}{ArrowLeft}{ArrowLeft}2020/11/11", { delay: 1 });
         expect(validate).not.toBeDisabled();
     });
     it("adds a row on validation", async () => {
         const onValidate = jest.fn();
         const { getByTestId, getAllByTestId, findByRole, getByText } = render(
-            <TableFilter columns={tableColumns} colsOrder={colsOrder} onValidate={onValidate} />
+            <TableFilter columns={tableColumns} colsOrder={colsOrder} onValidate={onValidate} filteredCount={0} />
         );
         const elt = getByTestId("FilterListIcon");
         await userEvent.click(elt);
-        const dropdownElts = getAllByTestId("ArrowDropDownIcon");
-        expect(dropdownElts).toHaveLength(2);
-        await userEvent.click(dropdownElts[0].parentElement?.firstElementChild || dropdownElts[0]);
+        const dropdownElements = getAllByTestId("ArrowDropDownIcon");
+        expect(dropdownElements).toHaveLength(2);
+        await userEvent.click(dropdownElements[0].parentElement?.firstElementChild || dropdownElements[0]);
         await findByRole("listbox");
         await userEvent.click(getByText("StringCol"));
-        await userEvent.click(dropdownElts[1].parentElement?.firstElementChild || dropdownElts[1]);
+        await userEvent.click(dropdownElements[1].parentElement?.firstElementChild || dropdownElements[1]);
         await findByRole("listbox");
         await userEvent.click(getByText("contains"));
         const validate = getByTestId("CheckIcon");
         expect(validate.parentElement).not.toBeDisabled();
         await userEvent.click(validate);
-        const ddElts = getAllByTestId("ArrowDropDownIcon");
-        expect(ddElts).toHaveLength(4);
-        const applyElt = getByText("Apply 1 filter");
-        expect(applyElt).toBeEnabled();
-        await userEvent.click(applyElt);
+        const ddElements = getAllByTestId("ArrowDropDownIcon");
+        expect(ddElements).toHaveLength(4);
+        getByText("1");
         expect(onValidate).toHaveBeenCalled();
     });
     it("delete a row", async () => {
         const onValidate = jest.fn();
         const { getByTestId, getAllByTestId, findByRole, getByText } = render(
-            <TableFilter columns={tableColumns} colsOrder={colsOrder} onValidate={onValidate} />
+            <TableFilter columns={tableColumns} colsOrder={colsOrder} onValidate={onValidate} filteredCount={0} />
         );
         const elt = getByTestId("FilterListIcon");
         await userEvent.click(elt);
-        const dropdownElts = getAllByTestId("ArrowDropDownIcon");
-        expect(dropdownElts).toHaveLength(2);
-        await userEvent.click(dropdownElts[0].parentElement?.firstElementChild || dropdownElts[0]);
+        const dropdownElements = getAllByTestId("ArrowDropDownIcon");
+        expect(dropdownElements).toHaveLength(2);
+        await userEvent.click(dropdownElements[0].parentElement?.firstElementChild || dropdownElements[0]);
         await findByRole("listbox");
         await userEvent.click(getByText("StringCol"));
-        await userEvent.click(dropdownElts[1].parentElement?.firstElementChild || dropdownElts[1]);
+        await userEvent.click(dropdownElements[1].parentElement?.firstElementChild || dropdownElements[1]);
         await findByRole("listbox");
         await userEvent.click(getByText("contains"));
         const validate = getByTestId("CheckIcon");
         expect(validate.parentElement).not.toBeDisabled();
         await userEvent.click(validate);
-        const ddElts = getAllByTestId("ArrowDropDownIcon");
-        expect(ddElts).toHaveLength(4);
+        const ddElements = getAllByTestId("ArrowDropDownIcon");
+        expect(ddElements).toHaveLength(4);
         const deletes = getAllByTestId("DeleteIcon");
         expect(deletes).toHaveLength(2);
         expect(deletes[0].parentElement).not.toBeDisabled();
         expect(deletes[1].parentElement).toBeDisabled();
         await userEvent.click(deletes[0]);
-        const ddElts2 = getAllByTestId("ArrowDropDownIcon");
-        expect(ddElts2).toHaveLength(2);
-        expect(getByText("Apply 0 filter")).toBeDisabled();
-        expect(getByText("Reset list (remove applied filter)")).toBeDisabled();
+        const ddElements2 = getAllByTestId("ArrowDropDownIcon");
+        expect(ddElements2).toHaveLength(2);
     });
     it("reset filters", async () => {
         const onValidate = jest.fn();
-        const { getByText, getByTestId } = render(
-            <TableFilter columns={tableColumns} colsOrder={colsOrder} onValidate={onValidate} appliedFilters={[{col: "StringCol", action: "==", value: ""}]} />
+        const { getAllByTestId, getByTestId } = render(
+            <TableFilter
+                columns={tableColumns}
+                colsOrder={colsOrder}
+                onValidate={onValidate}
+                appliedFilters={[{ col: "StringCol", action: "==", value: "", type: "" }]}
+                filteredCount={0}
+            />
         );
         const elt = getByTestId("FilterListIcon");
         await userEvent.click(elt);
-        const resetBut = getByText("Reset list (remove applied filter)");
-        expect(resetBut).toBeEnabled();
-        await userEvent.click(resetBut);
+        const deletes = getAllByTestId("DeleteIcon");
+        expect(deletes).toHaveLength(2);
+        expect(deletes[0].parentElement).not.toBeDisabled();
+        expect(deletes[1].parentElement).toBeDisabled();
+        await userEvent.click(deletes[0]);
         expect(onValidate).toHaveBeenCalled();
     });
     it("ignores unapplicable filters", async () => {
-        const { getByText, getByTestId } = render(
-            <TableFilter columns={tableColumns} colsOrder={colsOrder} onValidate={jest.fn()} appliedFilters={[{col: "unknown col", action: "==", value: ""}]} />
+        const { getAllByTestId, getByTestId } = render(
+            <TableFilter
+                columns={tableColumns}
+                colsOrder={colsOrder}
+                onValidate={jest.fn()}
+                appliedFilters={[{ col: "unknown col", action: "==", value: "", type: "" }]}
+                filteredCount={0}
+            />
         );
         const elt = getByTestId("FilterListIcon");
         await userEvent.click(elt);
-        const resetBut = getByText("Reset list (remove applied filter)");
-        expect(resetBut).not.toBeEnabled();
+        const ddElements2 = getAllByTestId("ArrowDropDownIcon");
+        expect(ddElements2).toHaveLength(2);
+    });
+});
+describe("Table Filter Component - Case Insensitive Test", () => {
+    it("renders the case sensitivity button", async () => {
+        const { getByTestId, getAllByTestId, findByRole, getByText, getByRole } = render(
+            <TableFilter columns={tableColumns} colsOrder={colsOrder} onValidate={jest.fn()} filteredCount={0} />
+        );
+
+        // Open filter popover
+        const filterIcon = getByTestId("FilterListIcon");
+        await userEvent.click(filterIcon);
+
+        // Select string column from dropdown
+        const dropdownIcons = getAllByTestId("ArrowDropDownIcon");
+        await userEvent.click(dropdownIcons[0].parentElement?.firstElementChild || dropdownIcons[0]);
+        await findByRole("listbox");
+        await userEvent.click(getByText("StringCol"));
+
+        // Check for the case-sensitive toggle and interact with it
+        const caseButton = getByRole("button", { name: /ignore case/i });
+        expect(caseButton).toBeInTheDocument(); // Ensure the button is rendered
+        await userEvent.click(caseButton); // change case sensitivity
     });
 });

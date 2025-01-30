@@ -1,4 +1,4 @@
-# Copyright 2023 Avaiga Private Limited
+# Copyright 2021-2025 Avaiga Private Limited
 #
 # Licensed under the Apache License, Version 2.0 (the "License"); you may not use this file except in compliance with
 # the License. You may obtain a copy of the License at
@@ -11,30 +11,31 @@
 
 import os
 import pathlib
-from datetime import datetime
+import re
+import uuid
+from datetime import datetime, timedelta
 from time import sleep
 from typing import Dict
 
-import modin.pandas as modin_pd
+import freezegun
 import numpy as np
 import pandas as pd
 import pytest
-from modin.pandas.test.utils import df_equals
 from pandas.testing import assert_frame_equal
 
-from src.taipy.core.data._data_manager import _DataManager
-from src.taipy.core.data.data_node_id import DataNodeId
-from src.taipy.core.data.excel import ExcelDataNode
-from src.taipy.core.data.operator import JoinOperator, Operator
-from src.taipy.core.exceptions.exceptions import (
+from taipy.common.config import Config
+from taipy.common.config.common.scope import Scope
+from taipy.core.common._utils import _normalize_path
+from taipy.core.data._data_manager import _DataManager
+from taipy.core.data._data_manager_factory import _DataManagerFactory
+from taipy.core.data.data_node_id import DataNodeId
+from taipy.core.data.excel import ExcelDataNode
+from taipy.core.exceptions.exceptions import (
     ExposedTypeLengthMismatch,
     InvalidExposedType,
-    NoData,
     NonExistingExcelSheet,
-    SheetNameLengthMismatch,
 )
-from taipy.config.common.scope import Scope
-from taipy.config.config import Config
+from taipy.core.reason import NoFileToDownload, NotAFile
 
 
 @pytest.fixture(scope="function", autouse=True)
@@ -80,11 +81,10 @@ class TestExcelDataNode:
     def test_create(self):
         path = "data/node/path"
         sheet_names = ["sheet_name_1", "sheet_name_2"]
-        dn = ExcelDataNode(
-            "foo_bar",
-            Scope.SCENARIO,
-            properties={"path": path, "has_header": False, "sheet_name": sheet_names, "name": "super name"},
+        excel_dn_config = Config.configure_excel_data_node(
+            id="foo_bar", default_path=path, has_header=False, sheet_name="Sheet1", name="super name"
         )
+        dn = _DataManagerFactory._build_manager()._create_and_set(excel_dn_config, None, None)
         assert isinstance(dn, ExcelDataNode)
         assert dn.storage_type() == "excel"
         assert dn.config_id == "foo_bar"
@@ -97,8 +97,49 @@ class TestExcelDataNode:
         assert dn.job_ids == []
         assert not dn.is_ready_for_reading
         assert dn.path == path
-        assert dn.has_header is False
-        assert dn.sheet_name == sheet_names
+        assert dn.properties["has_header"] is False
+        assert dn.properties["sheet_name"] == "Sheet1"
+
+        excel_dn_config_1 = Config.configure_excel_data_node(
+            id="baz", default_path=path, has_header=True, sheet_name="Sheet1", exposed_type=MyCustomObject
+        )
+        dn_1 = _DataManagerFactory._build_manager()._create_and_set(excel_dn_config_1, None, None)
+        assert isinstance(dn_1, ExcelDataNode)
+        assert dn_1.properties["has_header"] is True
+        assert dn_1.properties["sheet_name"] == "Sheet1"
+        assert dn_1.properties["exposed_type"] == MyCustomObject
+
+        excel_dn_config_2 = Config.configure_excel_data_node(
+            id="baz",
+            default_path=path,
+            has_header=True,
+            sheet_name=sheet_names,
+            exposed_type={"Sheet1": "pandas", "Sheet2": "numpy"},
+        )
+        dn_2 = _DataManagerFactory._build_manager()._create_and_set(excel_dn_config_2, None, None)
+        assert isinstance(dn_2, ExcelDataNode)
+        assert dn_2.properties["sheet_name"] == sheet_names
+        assert dn_2.properties["exposed_type"] == {"Sheet1": "pandas", "Sheet2": "numpy"}
+
+        excel_dn_config_3 = Config.configure_excel_data_node(
+            id="baz", default_path=path, has_header=True, sheet_name=sheet_names, exposed_type=MyCustomObject
+        )
+        dn_3 = _DataManagerFactory._build_manager()._create_and_set(excel_dn_config_3, None, None)
+        assert isinstance(dn_3, ExcelDataNode)
+        assert dn_3.properties["sheet_name"] == sheet_names
+        assert dn_3.properties["exposed_type"] == MyCustomObject
+
+        excel_dn_config_4 = Config.configure_excel_data_node(
+            id="baz",
+            default_path=path,
+            has_header=True,
+            sheet_name=sheet_names,
+            exposed_type={"Sheet1": MyCustomObject, "Sheet2": MyCustomObject2},
+        )
+        dn_4 = _DataManagerFactory._build_manager()._create_and_set(excel_dn_config_4, None, None)
+        assert isinstance(dn_4, ExcelDataNode)
+        assert dn_4.properties["sheet_name"] == sheet_names
+        assert dn_4.properties["exposed_type"] == {"Sheet1": MyCustomObject, "Sheet2": MyCustomObject2}
 
     def test_get_user_properties(self, excel_file):
         dn_1 = ExcelDataNode("dn_1", Scope.SCENARIO, properties={"path": "data/node/path"})
@@ -120,1388 +161,14 @@ class TestExcelDataNode:
         # exposed_type, default_data, default_path, path, has_header are filtered out
         assert dn_2._get_user_properties() == {"foo": "bar"}
 
-    def test_read_with_header(self):
-        with pytest.raises(NoData):
-            not_existing_excel = ExcelDataNode("foo", Scope.SCENARIO, properties={"path": "WRONG.xlsx"})
-            assert not_existing_excel.read() is None
-            not_existing_excel.read_or_raise()
-
-        empty_excel_path = os.path.join(pathlib.Path(__file__).parent.resolve(), "data_sample/empty.xlsx")
-        empty_excel = ExcelDataNode(
-            "foo",
-            Scope.SCENARIO,
-            properties={"path": empty_excel_path, "exposed_type": MyCustomObject, "has_header": True},
-        )
-        assert len(empty_excel.read()) == 0
-
+    def test_modin_deprecated_in_favor_of_pandas(self):
         path = os.path.join(pathlib.Path(__file__).parent.resolve(), "data_sample/example.xlsx")
-
-        # Create ExcelDataNode without exposed_type (Default is pandas.DataFrame)
-        excel_data_node_as_pandas = ExcelDataNode(
-            "bar", Scope.SCENARIO, properties={"path": path, "sheet_name": "Sheet1"}
-        )
-
-        data_pandas = excel_data_node_as_pandas.read()
-        assert isinstance(data_pandas, pd.DataFrame)
-        assert len(data_pandas) == 5
-        assert np.array_equal(data_pandas.to_numpy(), pd.read_excel(path).to_numpy())
-
         # Create ExcelDataNode with modin exposed_type
-        excel_data_node_as_modin = ExcelDataNode(
-            "bar", Scope.SCENARIO, properties={"path": path, "sheet_name": "Sheet1", "exposed_type": "modin"}
-        )
-
-        data_modin = excel_data_node_as_modin.read()
-        assert isinstance(data_modin, modin_pd.DataFrame)
-        assert len(data_modin) == 5
-        assert np.array_equal(data_modin.to_numpy(), pd.read_excel(path).to_numpy())
-
-        # Create ExcelDataNode with numpy exposed_type
-        excel_data_node_as_numpy = ExcelDataNode(
-            "bar", Scope.SCENARIO, properties={"path": path, "exposed_type": "numpy", "sheet_name": "Sheet1"}
-        )
-
-        data_numpy = excel_data_node_as_numpy.read()
-        assert isinstance(data_numpy, np.ndarray)
-        assert len(data_numpy) == 5
-        assert np.array_equal(data_numpy, pd.read_excel(path).to_numpy())
-
-        # Create the same ExcelDataNode but with custom exposed_type
-        non_existing_sheet_name_custom = ExcelDataNode(
-            "bar",
-            Scope.SCENARIO,
-            properties={"path": path, "sheet_name": "abc", "exposed_type": MyCustomObject},
-        )
-        with pytest.raises(NonExistingExcelSheet):
-            non_existing_sheet_name_custom.read()
-
-        excel_data_node_as_custom_object = ExcelDataNode(
-            "bar",
-            Scope.SCENARIO,
-            properties={"path": path, "exposed_type": MyCustomObject, "sheet_name": "Sheet1"},
-        )
-
-        data_custom = excel_data_node_as_custom_object.read()
-        assert isinstance(data_custom, list)
-        assert len(data_custom) == 5
-
-        for (_, row_pandas), row_custom in zip(data_pandas.iterrows(), data_custom):
-            assert isinstance(row_custom, MyCustomObject)
-            assert row_pandas["id"] == row_custom.id
-            assert row_pandas["integer"] == row_custom.integer
-            assert row_pandas["text"] == row_custom.text
-
-    def test_read_without_header(self):
-        not_existing_excel = ExcelDataNode(
-            "foo", Scope.SCENARIO, properties={"path": "WRONG.xlsx", "has_header": False}
-        )
-        with pytest.raises(NoData):
-            assert not_existing_excel.read() is None
-            not_existing_excel.read_or_raise()
-
-        path = os.path.join(pathlib.Path(__file__).parent.resolve(), "data_sample/example.xlsx")
-
-        # Create ExcelDataNode without exposed_type (Default is pandas.DataFrame)
-        excel_data_node_as_pandas = ExcelDataNode(
-            "bar", Scope.SCENARIO, properties={"path": path, "has_header": False, "sheet_name": "Sheet1"}
-        )
-        data_pandas = excel_data_node_as_pandas.read()
-        assert isinstance(data_pandas, pd.DataFrame)
-        assert len(data_pandas) == 6
-        assert np.array_equal(data_pandas.to_numpy(), pd.read_excel(path, header=None).to_numpy())
-
-        # Create ExcelDataNode with modin exposed_type
-        excel_data_node_as_modin = ExcelDataNode(
-            "bar",
-            Scope.SCENARIO,
-            properties={"path": path, "has_header": False, "sheet_name": "Sheet1", "exposed_type": "modin"},
-        )
-        data_modin = excel_data_node_as_modin.read()
-        assert isinstance(data_modin, modin_pd.DataFrame)
-        assert len(data_modin) == 6
-        assert np.array_equal(data_modin.to_numpy(), pd.read_excel(path, header=None).to_numpy())
-
-        # Create ExcelDataNode with numpy exposed_type
-        excel_data_node_as_numpy = ExcelDataNode(
-            "bar",
-            Scope.SCENARIO,
-            properties={"path": path, "has_header": False, "exposed_type": "numpy", "sheet_name": "Sheet1"},
-        )
-
-        data_numpy = excel_data_node_as_numpy.read()
-        assert isinstance(data_numpy, np.ndarray)
-        assert len(data_numpy) == 6
-        assert np.array_equal(data_numpy, pd.read_excel(path, header=None).to_numpy())
-
-        # Create the same ExcelDataNode but with custom exposed_type
-        non_existing_sheet_name_custom = ExcelDataNode(
-            "bar",
-            Scope.SCENARIO,
-            properties={"path": path, "has_header": False, "sheet_name": "abc", "exposed_type": MyCustomObject},
-        )
-        with pytest.raises(NonExistingExcelSheet):
-            non_existing_sheet_name_custom.read()
-
-        excel_data_node_as_custom_object = ExcelDataNode(
-            "bar",
-            Scope.SCENARIO,
-            properties={
-                "path": path,
-                "has_header": False,
-                "exposed_type": MyCustomObject,
-                "sheet_name": "Sheet1",
-            },
-        )
-
-        data_custom = excel_data_node_as_custom_object.read()
-        assert isinstance(data_custom, list)
-        assert len(data_custom) == 6
-
-        for (_, row_pandas), row_custom in zip(data_pandas.iterrows(), data_custom):
-            assert isinstance(row_custom, MyCustomObject)
-            assert row_pandas[0] == row_custom.id
-            assert row_pandas[1] == row_custom.integer
-            assert row_pandas[2] == row_custom.text
-
-    @pytest.mark.parametrize(
-        "content,columns",
-        [
-            ([{"a": 11, "b": 22, "c": 33}, {"a": 44, "b": 55, "c": 66}], None),
-            ([[11, 22, 33], [44, 55, 66]], None),
-            ([[11, 22, 33], [44, 55, 66]], ["e", "f", "g"]),
-        ],
-    )
-    def test_write(self, excel_file, default_data_frame, content, columns):
-        excel_dn = ExcelDataNode("foo", Scope.SCENARIO, properties={"path": excel_file, "sheet_name": "Sheet1"})
-        assert np.array_equal(excel_dn.read().values, default_data_frame.values)
-        if not columns:
-            excel_dn.write(content)
-            df = pd.DataFrame(content)
-        else:
-            excel_dn.write_with_column_names(content, columns)
-            df = pd.DataFrame(content, columns=columns)
-
-        assert np.array_equal(excel_dn.read().values, df.values)
-
-        excel_dn.write(None)
-        assert len(excel_dn.read()) == 0
-
-    @pytest.mark.parametrize(
-        "content,sheet_name",
-        [
-            ([{"a": 11, "b": 22, "c": 33}, {"a": 44, "b": 55, "c": 66}], "sheet_name"),
-            ([[11, 22, 33], [44, 55, 66]], ["sheet_name"]),
-        ],
-    )
-    def test_write_with_sheet_name(self, excel_file_with_sheet_name, default_data_frame, content, sheet_name):
-        excel_dn = ExcelDataNode(
-            "foo", Scope.SCENARIO, properties={"path": excel_file_with_sheet_name, "sheet_name": sheet_name}
-        )
-        df = pd.DataFrame(content)
-
-        if isinstance(sheet_name, str):
-            assert np.array_equal(excel_dn.read().values, default_data_frame.values)
-        else:
-            assert np.array_equal(excel_dn.read()["sheet_name"].values, default_data_frame.values)
-
-        excel_dn.write(content)
-        if isinstance(sheet_name, str):
-            assert np.array_equal(excel_dn.read().values, df.values)
-        else:
-            assert np.array_equal(excel_dn.read()["sheet_name"].values, df.values)
-
-        sheet_names = pd.ExcelFile(excel_file_with_sheet_name).sheet_names
-        expected_sheet_name = sheet_name[0] if isinstance(sheet_name, list) else sheet_name
-
-        assert sheet_names[0] == expected_sheet_name
-
-        excel_dn.write(None)
-        if isinstance(sheet_name, str):
-            assert len(excel_dn.read()) == 0
-        else:
-            assert len(excel_dn.read()) == 1
-
-    @pytest.mark.parametrize(
-        "content,sheet_name",
-        [
-            ([[11, 22, 33], [44, 55, 66]], ["sheet_name_1", "sheet_name_2"]),
-        ],
-    )
-    def test_raise_write_with_sheet_name_length_mismatch(
-        self, excel_file_with_sheet_name, default_data_frame, content, sheet_name
-    ):
-        excel_dn = ExcelDataNode(
-            "foo", Scope.SCENARIO, properties={"path": excel_file_with_sheet_name, "sheet_name": sheet_name}
-        )
-        with pytest.raises(SheetNameLengthMismatch):
-            excel_dn.write(content)
-
-    @pytest.mark.parametrize(
-        "content",
-        [
-            ([{"a": 11, "b": 22, "c": 33}, {"a": 44, "b": 55, "c": 66}]),
-        ],
-    )
-    def test_write_without_sheet_name(self, excel_file_with_sheet_name, default_data_frame, content):
-        excel_dn = ExcelDataNode("foo", Scope.SCENARIO, properties={"path": excel_file_with_sheet_name})
-        default_data_frame = {"sheet_name": default_data_frame}
-        df = {"Sheet1": pd.DataFrame(content)}
-
-        assert np.array_equal(excel_dn.read()["sheet_name"].values, default_data_frame["sheet_name"].values)
-
-        excel_dn.write(content)
-        assert np.array_equal(excel_dn.read()["Sheet1"].values, df["Sheet1"].values)
-
-        sheet_names = pd.ExcelFile(excel_file_with_sheet_name).sheet_names
-        expected_sheet_name = "Sheet1"
-
-        assert sheet_names[0] == expected_sheet_name
-
-        excel_dn.write(None)
-        assert len(excel_dn.read()) == 1
-
-    @pytest.mark.parametrize(
-        "content,columns,sheet_name",
-        [
-            ([[11, 22, 33], [44, 55, 66]], ["e", "f", "g"], "sheet_name"),
-            ([[11, 22, 33], [44, 55, 66]], ["e", "f", "g"], ["sheet_name"]),
-        ],
-    )
-    def test_write_with_column_and_sheet_name(
-        self, excel_file_with_sheet_name, default_data_frame, content, columns, sheet_name
-    ):
-        excel_dn = ExcelDataNode(
-            "foo", Scope.SCENARIO, properties={"path": excel_file_with_sheet_name, "sheet_name": sheet_name}
-        )
-        df = pd.DataFrame(content)
-
-        if isinstance(sheet_name, str):
-            assert np.array_equal(excel_dn.read().values, default_data_frame.values)
-        else:
-            assert np.array_equal(excel_dn.read()["sheet_name"].values, default_data_frame.values)
-
-        excel_dn.write_with_column_names(content, columns)
-
-        if isinstance(sheet_name, str):
-            assert np.array_equal(excel_dn.read().values, df.values)
-        else:
-            assert np.array_equal(excel_dn.read()["sheet_name"].values, df.values)
-
-        sheet_names = pd.ExcelFile(excel_file_with_sheet_name).sheet_names
-        expected_sheet_name = sheet_name[0] if isinstance(sheet_name, list) else sheet_name
-
-        assert sheet_names[0] == expected_sheet_name
-
-        excel_dn.write(None)
-        if isinstance(sheet_name, str):
-            assert len(excel_dn.read()) == 0
-        else:
-            assert len(excel_dn.read()) == 1
-
-    @pytest.mark.parametrize(
-        "content,columns",
-        [
-            ([{"a": 11, "b": 22, "c": 33}, {"a": 44, "b": 55, "c": 66}], None),
-            ([[11, 22, 33], [44, 55, 66]], None),
-            ([[11, 22, 33], [44, 55, 66]], ["e", "f", "g"]),
-        ],
-    )
-    def test_write_modin(self, excel_file, default_data_frame, content, columns):
-        excel_dn = ExcelDataNode(
-            "foo", Scope.SCENARIO, properties={"path": excel_file, "sheet_name": "Sheet1", "exposed_type": "modin"}
-        )
-        assert np.array_equal(excel_dn.read().values, default_data_frame.values)
-        if not columns:
-            excel_dn.write(content)
-            df = modin_pd.DataFrame(content)
-        else:
-            excel_dn.write_with_column_names(content, columns)
-            df = modin_pd.DataFrame(content, columns=columns)
-
-        assert np.array_equal(excel_dn.read().values, df.values)
-
-        excel_dn.write(None)
-        assert len(excel_dn.read()) == 0
-
-    def test_read_multi_sheet_with_header(self):
-        not_existing_excel = ExcelDataNode(
-            "foo",
-            Scope.SCENARIO,
-            properties={"path": "WRONG.xlsx", "sheet_name": ["sheet_name_1", "sheet_name_2"]},
-        )
-        with pytest.raises(NoData):
-            assert not_existing_excel.read() is None
-            not_existing_excel.read_or_raise()
-
-        path = os.path.join(pathlib.Path(__file__).parent.resolve(), "data_sample/example.xlsx")
-        sheet_names = ["Sheet1", "Sheet2"]
-
-        # Create ExcelDataNode without exposed_type (Default is pandas.DataFrame)
-        excel_data_node_as_pandas = ExcelDataNode(
-            "bar", Scope.SCENARIO, properties={"path": path, "sheet_name": sheet_names}
-        )
-
-        data_pandas = excel_data_node_as_pandas.read()
-        assert isinstance(data_pandas, Dict)
-        assert len(data_pandas) == 2
-        assert all(
-            len(data_pandas[sheet_name] == 5) and isinstance(data_pandas[sheet_name], pd.DataFrame)
-            for sheet_name in sheet_names
-        )
-        assert list(data_pandas.keys()) == sheet_names
-        for sheet_name in sheet_names:
-            assert data_pandas[sheet_name].equals(pd.read_excel(path, sheet_name=sheet_name))
-
-        excel_data_node_as_pandas_no_sheet_name = ExcelDataNode("bar", Scope.SCENARIO, properties={"path": path})
-
-        data_pandas_no_sheet_name = excel_data_node_as_pandas_no_sheet_name.read()
-        assert isinstance(data_pandas_no_sheet_name, Dict)
-        for key in data_pandas_no_sheet_name.keys():
-            assert isinstance(data_pandas_no_sheet_name[key], pd.DataFrame)
-            assert data_pandas[key].equals(data_pandas_no_sheet_name[key])
-
-        # Create ExcelDataNode with modin exposed_type
-        excel_data_node_as_modin = ExcelDataNode(
-            "bar", Scope.SCENARIO, properties={"path": path, "sheet_name": sheet_names, "exposed_type": "modin"}
-        )
-
-        data_modin = excel_data_node_as_modin.read()
-        assert isinstance(data_modin, Dict)
-        assert len(data_modin) == 2
-        assert all(
-            len(data_modin[sheet_name] == 5) and isinstance(data_modin[sheet_name], modin_pd.DataFrame)
-            for sheet_name in sheet_names
-        )
-        assert list(data_modin.keys()) == sheet_names
-        for sheet_name in sheet_names:
-            assert data_modin[sheet_name].equals(modin_pd.read_excel(path, sheet_name=sheet_name))
-
-        excel_data_node_as_pandas_no_sheet_name = ExcelDataNode(
-            "bar", Scope.SCENARIO, properties={"path": path, "exposed_type": "modin"}
-        )
-
-        data_modin_no_sheet_name = excel_data_node_as_pandas_no_sheet_name.read()
-        assert isinstance(data_modin_no_sheet_name, Dict)
-        for key in data_modin_no_sheet_name.keys():
-            assert isinstance(data_modin_no_sheet_name[key], modin_pd.DataFrame)
-            assert data_modin[key].equals(data_modin_no_sheet_name[key])
-
-        # Create ExcelDataNode with numpy exposed_type
-        excel_data_node_as_numpy = ExcelDataNode(
-            "bar",
-            Scope.SCENARIO,
-            properties={"path": path, "sheet_name": sheet_names, "exposed_type": "numpy"},
-        )
-
-        data_numpy = excel_data_node_as_numpy.read()
-        assert isinstance(data_numpy, Dict)
-        assert len(data_numpy) == 2
-        assert all(
-            len(data_numpy[sheet_name] == 5) and isinstance(data_numpy[sheet_name], np.ndarray)
-            for sheet_name in sheet_names
-        )
-        assert list(data_numpy.keys()) == sheet_names
-        for sheet_name in sheet_names:
-            assert np.array_equal(data_pandas[sheet_name], pd.read_excel(path, sheet_name=sheet_name).to_numpy())
-
-        excel_data_node_as_numpy_no_sheet_name = ExcelDataNode(
-            "bar",
-            Scope.SCENARIO,
-            properties={"path": path, "exposed_type": "numpy"},
-        )
-
-        data_numpy_no_sheet_name = excel_data_node_as_numpy_no_sheet_name.read()
-        assert isinstance(data_numpy_no_sheet_name, Dict)
-        for key in data_numpy_no_sheet_name.keys():
-            assert isinstance(data_numpy_no_sheet_name[key], np.ndarray)
-            assert np.array_equal(data_numpy[key], data_numpy_no_sheet_name[key])
-
-        # Create the same ExcelDataNode but with custom exposed_type
-        non_existing_sheet_name_custom = ExcelDataNode(
-            "bar",
-            Scope.SCENARIO,
-            properties={
-                "path": path,
-                "sheet_name": ["Sheet1", "xyz"],
-                "exposed_type": MyCustomObject1,
-            },
-        )
-        with pytest.raises(NonExistingExcelSheet):
-            non_existing_sheet_name_custom.read()
-
-        excel_data_node_as_custom_object = ExcelDataNode(
-            "bar",
-            Scope.SCENARIO,
-            properties={"path": path, "sheet_name": sheet_names, "exposed_type": MyCustomObject1},
-        )
-
-        data_custom = excel_data_node_as_custom_object.read()
-        assert isinstance(data_custom, Dict)
-        assert len(data_custom) == 2
-        assert all(len(data_custom[sheet_name]) == 5 for sheet_name in sheet_names)
-        assert list(data_custom.keys()) == sheet_names
-
-        for sheet_name in sheet_names:
-            sheet_data_pandas, sheet_data_custom = data_pandas[sheet_name], data_custom[sheet_name]
-            for (_, row_pandas), row_custom in zip(sheet_data_pandas.iterrows(), sheet_data_custom):
-                assert isinstance(row_custom, MyCustomObject1)
-                assert row_pandas["id"] == row_custom.id
-                assert row_pandas["integer"] == row_custom.integer
-                assert row_pandas["text"] == row_custom.text
-
-        excel_data_node_as_custom_object_no_sheet_name = ExcelDataNode(
-            "bar",
-            Scope.SCENARIO,
-            properties={"path": path, "exposed_type": MyCustomObject1},
-        )
-
-        data_custom_no_sheet_name = excel_data_node_as_custom_object_no_sheet_name.read()
-        assert isinstance(data_custom_no_sheet_name, Dict)
-        assert len(data_custom_no_sheet_name) == 2
-        assert data_custom.keys() == data_custom_no_sheet_name.keys()
-
-        for sheet_name in sheet_names:
-            sheet_data_custom_no_sheet_name, sheet_data_custom = (
-                data_custom_no_sheet_name[sheet_name],
-                data_custom[sheet_name],
-            )
-            for row_custom_no_sheet_name, row_custom in zip(sheet_data_custom_no_sheet_name, sheet_data_custom):
-                assert isinstance(row_custom_no_sheet_name, MyCustomObject1)
-                assert row_custom_no_sheet_name.id == row_custom.id
-                assert row_custom_no_sheet_name.integer == row_custom.integer
-                assert row_custom_no_sheet_name.text == row_custom.text
-
-        with pytest.raises(ExposedTypeLengthMismatch):
-            dn = ExcelDataNode(
-                "bar",
-                Scope.SCENARIO,
-                properties={
-                    "path": path,
-                    "sheet_name": ["Sheet1"],
-                    "exposed_type": [MyCustomObject1, MyCustomObject2],
-                },
-            )
-            dn.read()
-
-        custom_class_dict = {"Sheet1": MyCustomObject1, "Sheet2": MyCustomObject2}
-
-        excel_data_node_as_multi_custom_object = ExcelDataNode(
-            "bar",
-            Scope.SCENARIO,
-            properties={"path": path, "sheet_name": sheet_names, "exposed_type": custom_class_dict},
-        )
-        assert excel_data_node_as_multi_custom_object.properties["exposed_type"] == custom_class_dict
-
-        excel_data_node_as_multi_custom_object = ExcelDataNode(
-            "bar",
-            Scope.SCENARIO,
-            properties={"path": path, "sheet_name": sheet_names, "exposed_type": [MyCustomObject1, MyCustomObject2]},
-        )
-        assert excel_data_node_as_multi_custom_object.properties["exposed_type"] == [MyCustomObject1, MyCustomObject2]
-
-        multi_data_custom = excel_data_node_as_multi_custom_object.read()
-        assert isinstance(multi_data_custom, Dict)
-        assert len(multi_data_custom) == 2
-        assert all(len(multi_data_custom[sheet_name]) == 5 for sheet_name in sheet_names)
-        assert list(multi_data_custom.keys()) == sheet_names
-
-        for sheet_name, custom_class in custom_class_dict.items():
-            sheet_data_pandas, sheet_data_custom = data_pandas[sheet_name], multi_data_custom[sheet_name]
-            for (_, row_pandas), row_custom in zip(sheet_data_pandas.iterrows(), sheet_data_custom):
-                assert isinstance(row_custom, custom_class)
-                assert row_pandas["id"] == row_custom.id
-                assert row_pandas["integer"] == row_custom.integer
-                assert row_pandas["text"] == row_custom.text
-
-        excel_data_node_as_multi_custom_object_no_sheet_name = ExcelDataNode(
-            "bar",
-            Scope.SCENARIO,
-            properties={"path": path, "exposed_type": custom_class_dict},
-        )
-        assert excel_data_node_as_multi_custom_object_no_sheet_name.properties["exposed_type"] == custom_class_dict
-
-        multi_data_custom_no_sheet_name = excel_data_node_as_multi_custom_object_no_sheet_name.read()
-        assert isinstance(multi_data_custom_no_sheet_name, Dict)
-        assert len(multi_data_custom_no_sheet_name) == 2
-        assert multi_data_custom.keys() == multi_data_custom_no_sheet_name.keys()
-
-        for sheet_name, custom_class in custom_class_dict.items():
-            sheet_data_custom_no_sheet_name, sheet_data_custom = (
-                multi_data_custom_no_sheet_name[sheet_name],
-                multi_data_custom[sheet_name],
-            )
-            for row_custom_no_sheet_name, row_custom in zip(sheet_data_custom_no_sheet_name, sheet_data_custom):
-                assert isinstance(row_custom_no_sheet_name, custom_class)
-                assert row_custom_no_sheet_name.id == row_custom.id
-                assert row_custom_no_sheet_name.integer == row_custom.integer
-                assert row_custom_no_sheet_name.text == row_custom.text
-
-    def test_read_multi_sheet_without_header(self):
-        not_existing_excel = ExcelDataNode(
-            "foo",
-            Scope.SCENARIO,
-            properties={"path": "WRONG.xlsx", "has_header": False, "sheet_name": ["sheet_name_1", "sheet_name_2"]},
-        )
-        with pytest.raises(NoData):
-            assert not_existing_excel.read() is None
-            not_existing_excel.read_or_raise()
-
-        path = os.path.join(pathlib.Path(__file__).parent.resolve(), "data_sample/example.xlsx")
-        sheet_names = ["Sheet1", "Sheet2"]
-
-        # Create ExcelDataNode without exposed_type (Default is pandas.DataFrame)
-        excel_data_node_as_pandas = ExcelDataNode(
-            "bar", Scope.SCENARIO, properties={"path": path, "has_header": False, "sheet_name": sheet_names}
-        )
-        data_pandas = excel_data_node_as_pandas.read()
-        assert isinstance(data_pandas, Dict)
-        assert len(data_pandas) == 2
-        assert all(len(data_pandas[sheet_name]) == 6 for sheet_name in sheet_names)
-        assert list(data_pandas.keys()) == sheet_names
-        for sheet_name in sheet_names:
-            assert isinstance(data_pandas[sheet_name], pd.DataFrame)
-            assert data_pandas[sheet_name].equals(pd.read_excel(path, header=None, sheet_name=sheet_name))
-
-        excel_data_node_as_pandas_no_sheet_name = ExcelDataNode(
-            "bar", Scope.SCENARIO, properties={"path": path, "has_header": False}
-        )
-        data_pandas_no_sheet_name = excel_data_node_as_pandas_no_sheet_name.read()
-        assert isinstance(data_pandas_no_sheet_name, Dict)
-        for key in data_pandas_no_sheet_name.keys():
-            assert isinstance(data_pandas_no_sheet_name[key], pd.DataFrame)
-            assert data_pandas[key].equals(data_pandas_no_sheet_name[key])
-
-        # Create ExcelDataNode with modin exposed_type
-        excel_data_node_as_modin = ExcelDataNode(
-            "bar",
-            Scope.SCENARIO,
-            properties={"path": path, "has_header": False, "sheet_name": sheet_names, "exposed_type": "modin"},
-        )
-        data_modin = excel_data_node_as_modin.read()
-        assert isinstance(data_modin, Dict)
-        assert len(data_modin) == 2
-        assert all(len(data_modin[sheet_name]) == 6 for sheet_name in sheet_names)
-        assert list(data_modin.keys()) == sheet_names
-        for sheet_name in sheet_names:
-            assert isinstance(data_modin[sheet_name], modin_pd.DataFrame)
-            assert data_modin[sheet_name].equals(pd.read_excel(path, header=None, sheet_name=sheet_name))
-
-        excel_data_node_as_modin_no_sheet_name = ExcelDataNode(
-            "bar", Scope.SCENARIO, properties={"path": path, "has_header": False, "exposed_type": "modin"}
-        )
-        data_modin_no_sheet_name = excel_data_node_as_modin_no_sheet_name.read()
-        assert isinstance(data_modin_no_sheet_name, Dict)
-        for key in data_modin_no_sheet_name.keys():
-            assert isinstance(data_modin_no_sheet_name[key], modin_pd.DataFrame)
-            assert data_modin[key].equals(data_modin_no_sheet_name[key])
-
-        # Create ExcelDataNode with numpy exposed_type
-        excel_data_node_as_numpy = ExcelDataNode(
-            "bar",
-            Scope.SCENARIO,
-            properties={"path": path, "has_header": False, "sheet_name": sheet_names, "exposed_type": "numpy"},
-        )
-
-        data_numpy = excel_data_node_as_numpy.read()
-        assert isinstance(data_numpy, Dict)
-        assert len(data_numpy) == 2
-        assert all(
-            len(data_numpy[sheet_name] == 6) and isinstance(data_numpy[sheet_name], np.ndarray)
-            for sheet_name in sheet_names
-        )
-        assert list(data_numpy.keys()) == sheet_names
-        for sheet_name in sheet_names:
-            assert np.array_equal(
-                data_pandas[sheet_name], pd.read_excel(path, header=None, sheet_name=sheet_name).to_numpy()
-            )
-
-        excel_data_node_as_numpy_no_sheet_name = ExcelDataNode(
-            "bar",
-            Scope.SCENARIO,
-            properties={"path": path, "has_header": False, "exposed_type": "numpy"},
-        )
-
-        data_numpy_no_sheet_name = excel_data_node_as_numpy_no_sheet_name.read()
-        assert isinstance(data_numpy_no_sheet_name, Dict)
-        for key in data_numpy_no_sheet_name.keys():
-            assert isinstance(data_numpy_no_sheet_name[key], np.ndarray)
-            assert np.array_equal(data_numpy[key], data_numpy_no_sheet_name[key])
-
-        # Create the same ExcelDataNode but with custom exposed_type
-        non_existing_sheet_name_custom = ExcelDataNode(
-            "bar",
-            Scope.SCENARIO,
-            properties={
-                "path": path,
-                "has_header": False,
-                "sheet_name": ["Sheet1", "xyz"],
-                "exposed_type": MyCustomObject1,
-            },
-        )
-        with pytest.raises(NonExistingExcelSheet):
-            non_existing_sheet_name_custom.read()
-
-        excel_data_node_as_custom_object = ExcelDataNode(
-            "bar",
-            Scope.SCENARIO,
-            properties={
-                "path": path,
-                "has_header": False,
-                "sheet_name": sheet_names,
-                "exposed_type": MyCustomObject1,
-            },
-        )
-
-        data_custom = excel_data_node_as_custom_object.read()
-        assert excel_data_node_as_custom_object.exposed_type == MyCustomObject1
-        assert isinstance(data_custom, Dict)
-        assert len(data_custom) == 2
-        assert all(len(data_custom[sheet_name]) == 6 for sheet_name in sheet_names)
-        assert list(data_custom.keys()) == sheet_names
-
-        for sheet_name in sheet_names:
-            sheet_data_pandas, sheet_data_custom = data_pandas[sheet_name], data_custom[sheet_name]
-            for (_, row_pandas), row_custom in zip(sheet_data_pandas.iterrows(), sheet_data_custom):
-                assert isinstance(row_custom, MyCustomObject1)
-                assert row_pandas[0] == row_custom.id
-                assert row_pandas[1] == row_custom.integer
-                assert row_pandas[2] == row_custom.text
-
-        excel_data_node_as_custom_object_no_sheet_name = ExcelDataNode(
-            "bar",
-            Scope.SCENARIO,
-            properties={"path": path, "has_header": False, "exposed_type": MyCustomObject1},
-        )
-
-        data_custom_no_sheet_name = excel_data_node_as_custom_object_no_sheet_name.read()
-        assert isinstance(data_custom_no_sheet_name, Dict)
-        assert len(data_custom_no_sheet_name) == 2
-        assert data_custom.keys() == data_custom_no_sheet_name.keys()
-
-        for sheet_name in sheet_names:
-            sheet_data_custom_no_sheet_name, sheet_data_custom = (
-                data_custom_no_sheet_name[sheet_name],
-                data_custom[sheet_name],
-            )
-            for row_custom_no_sheet_name, row_custom in zip(sheet_data_custom_no_sheet_name, sheet_data_custom):
-                assert isinstance(row_custom_no_sheet_name, MyCustomObject1)
-                assert row_custom_no_sheet_name.id == row_custom.id
-                assert row_custom_no_sheet_name.integer == row_custom.integer
-                assert row_custom_no_sheet_name.text == row_custom.text
-
-        with pytest.raises(ExposedTypeLengthMismatch):
-            dn = ExcelDataNode(
-                "bar",
-                Scope.SCENARIO,
-                properties={
-                    "path": path,
-                    "sheet_name": ["Sheet1"],
-                    "exposed_type": [MyCustomObject1, MyCustomObject2],
-                    "has_header": False,
-                },
-            )
-            dn.read()
-
-        custom_class_dict = {"Sheet1": MyCustomObject1, "Sheet2": MyCustomObject2}
-
-        excel_data_node_as_multi_custom_object = ExcelDataNode(
-            "bar",
-            Scope.SCENARIO,
-            properties={
-                "path": path,
-                "sheet_name": sheet_names,
-                "exposed_type": custom_class_dict,
-                "has_header": False,
-            },
-        )
-        assert excel_data_node_as_multi_custom_object.properties["exposed_type"] == custom_class_dict
-
-        excel_data_node_as_multi_custom_object = ExcelDataNode(
-            "bar",
-            Scope.SCENARIO,
-            properties={
-                "path": path,
-                "sheet_name": sheet_names,
-                "exposed_type": [MyCustomObject1, MyCustomObject2],
-                "has_header": False,
-            },
-        )
-        assert excel_data_node_as_multi_custom_object.properties["exposed_type"] == [MyCustomObject1, MyCustomObject2]
-
-        multi_data_custom = excel_data_node_as_multi_custom_object.read()
-        assert isinstance(multi_data_custom, Dict)
-        assert len(multi_data_custom) == 2
-        assert all(len(multi_data_custom[sheet_name]) == 6 for sheet_name in sheet_names)
-        assert list(multi_data_custom.keys()) == sheet_names
-
-        for sheet_name, custom_class in custom_class_dict.items():
-            sheet_data_pandas, sheet_data_custom = data_pandas[sheet_name], multi_data_custom[sheet_name]
-            for (_, row_pandas), row_custom in zip(sheet_data_pandas.iterrows(), sheet_data_custom):
-                assert isinstance(row_custom, custom_class)
-                assert row_pandas[0] == row_custom.id
-                assert row_pandas[1] == row_custom.integer
-                assert row_pandas[2] == row_custom.text
-
-        excel_data_node_as_multi_custom_object_no_sheet_name = ExcelDataNode(
-            "bar",
-            Scope.SCENARIO,
-            properties={"path": path, "has_header": False, "exposed_type": custom_class_dict},
-        )
-
-        multi_data_custom_no_sheet_name = excel_data_node_as_multi_custom_object_no_sheet_name.read()
-        assert isinstance(multi_data_custom_no_sheet_name, Dict)
-        assert len(multi_data_custom_no_sheet_name) == 2
-        assert multi_data_custom.keys() == multi_data_custom_no_sheet_name.keys()
-
-        for sheet_name, custom_class in custom_class_dict.items():
-            sheet_data_custom_no_sheet_name, sheet_data_custom = (
-                multi_data_custom_no_sheet_name[sheet_name],
-                multi_data_custom[sheet_name],
-            )
-            for row_custom_no_sheet_name, row_custom in zip(sheet_data_custom_no_sheet_name, sheet_data_custom):
-                assert isinstance(row_custom_no_sheet_name, custom_class)
-                assert row_custom_no_sheet_name.id == row_custom.id
-                assert row_custom_no_sheet_name.integer == row_custom.integer
-                assert row_custom_no_sheet_name.text == row_custom.text
-
-    @pytest.mark.parametrize(
-        "content,columns",
-        [
-            ([{"a": 11, "b": 22, "c": 33}, {"a": 44, "b": 55, "c": 66}], None),
-            ([[11, 22, 33], [44, 55, 66]], None),
-            ([[11, 22, 33], [44, 55, 66]], ["e", "f", "g"]),
-        ],
-    )
-    def test_write_multi_sheet(self, excel_file_with_multi_sheet, default_multi_sheet_data_frame, content, columns):
-        sheet_names = ["Sheet1", "Sheet2"]
-
-        excel_dn = ExcelDataNode(
-            "foo",
-            Scope.SCENARIO,
-            properties={"path": excel_file_with_multi_sheet, "sheet_name": sheet_names},
-        )
-
-        for sheet_name in sheet_names:
-            assert np.array_equal(excel_dn.read()[sheet_name].values, default_multi_sheet_data_frame[sheet_name].values)
-
-        multi_sheet_content = {sheet_name: pd.DataFrame(content) for sheet_name in sheet_names}
-
-        excel_dn.write(multi_sheet_content)
-
-        for sheet_name in sheet_names:
-            assert np.array_equal(excel_dn.read()[sheet_name].values, multi_sheet_content[sheet_name].values)
-
-    def test_write_multi_sheet_numpy(self, excel_file_with_multi_sheet):
-        sheet_names = ["Sheet1", "Sheet2"]
-
-        excel_dn = ExcelDataNode(
-            "foo",
-            Scope.SCENARIO,
-            properties={"path": excel_file_with_multi_sheet, "sheet_name": sheet_names, "exposed_type": "numpy"},
-        )
-
-        sheets_data = [[11, 22, 33], [44, 55, 66]]
-        data = {
-            sheet_name: pd.DataFrame(sheet_data).to_numpy() for sheet_name, sheet_data in zip(sheet_names, sheets_data)
-        }
-        excel_dn.write(data)
-        read_data = excel_dn.read()
-        assert all(np.array_equal(data[sheet_name], read_data[sheet_name]) for sheet_name in sheet_names)
-
-    @pytest.mark.parametrize(
-        "content,columns",
-        [
-            ([{"a": 11, "b": 22, "c": 33}, {"a": 44, "b": 55, "c": 66}], None),
-            ([[11, 22, 33], [44, 55, 66]], None),
-            ([[11, 22, 33], [44, 55, 66]], ["e", "f", "g"]),
-        ],
-    )
-    def test_write_multi_sheet_with_modin(
-        self, excel_file_with_multi_sheet, default_multi_sheet_data_frame, content, columns
-    ):
-        sheet_names = ["Sheet1", "Sheet2"]
-
-        excel_dn = ExcelDataNode(
-            "foo",
-            Scope.SCENARIO,
-            properties={"path": excel_file_with_multi_sheet, "sheet_name": sheet_names, "exposed_type": "modin"},
-        )
-
-        for sheet_name in sheet_names:
-            assert np.array_equal(excel_dn.read()[sheet_name].values, default_multi_sheet_data_frame[sheet_name].values)
-
-        multi_sheet_content = {sheet_name: modin_pd.DataFrame(content) for sheet_name in sheet_names}
-
-        excel_dn.write(multi_sheet_content)
-
-        for sheet_name in sheet_names:
-            assert np.array_equal(excel_dn.read()[sheet_name].values, multi_sheet_content[sheet_name].values)
-
-    @pytest.mark.parametrize(
-        "content",
-        [
-            ([{"a": 11, "b": 22, "c": 33}, {"a": 44, "b": 55, "c": 66}]),
-            (pd.DataFrame([{"a": 11, "b": 22, "c": 33}, {"a": 44, "b": 55, "c": 66}])),
-            ([[11, 22, 33], [44, 55, 66]]),
-        ],
-    )
-    def test_append_pandas_with_sheetname(self, excel_file, default_data_frame, content):
-        dn = ExcelDataNode("foo", Scope.SCENARIO, properties={"path": excel_file, "sheet_name": "Sheet1"})
-        assert_frame_equal(dn.read(), default_data_frame)
-
-        dn.append(content)
-        assert_frame_equal(
-            dn.read(),
-            pd.concat([default_data_frame, pd.DataFrame(content, columns=["a", "b", "c"])]).reset_index(drop=True),
-        )
-
-    @pytest.mark.parametrize(
-        "content",
-        [
-            ([{"a": 11, "b": 22, "c": 33}, {"a": 44, "b": 55, "c": 66}]),
-            (pd.DataFrame([{"a": 11, "b": 22, "c": 33}, {"a": 44, "b": 55, "c": 66}])),
-            ([[11, 22, 33], [44, 55, 66]]),
-        ],
-    )
-    def test_append_pandas_without_sheetname(self, excel_file, default_data_frame, content):
-        dn = ExcelDataNode("foo", Scope.SCENARIO, properties={"path": excel_file})
-        assert_frame_equal(dn.read()["Sheet1"], default_data_frame)
-
-        dn.append(content)
-        assert_frame_equal(
-            dn.read()["Sheet1"],
-            pd.concat([default_data_frame, pd.DataFrame(content, columns=["a", "b", "c"])]).reset_index(drop=True),
-        )
-
-    @pytest.mark.parametrize(
-        "content",
-        [
-            (
-                {
-                    "Sheet1": pd.DataFrame([{"a": 11, "b": 22, "c": 33}]),
-                    "Sheet2": pd.DataFrame([{"a": 44, "b": 55, "c": 66}]),
-                }
-            ),
-            (
-                {
-                    "Sheet1": pd.DataFrame({"a": [11, 44], "b": [22, 55], "c": [33, 66]}),
-                    "Sheet2": pd.DataFrame([{"a": 77, "b": 88, "c": 99}]),
-                }
-            ),
-            ({"Sheet1": np.array([[11, 22, 33], [44, 55, 66]]), "Sheet2": np.array([[77, 88, 99]])}),
-        ],
-    )
-    def test_append_pandas_multisheet(self, excel_file_with_multi_sheet, default_multi_sheet_data_frame, content):
-        dn = ExcelDataNode(
-            "foo", Scope.SCENARIO, properties={"path": excel_file_with_multi_sheet, "sheet_name": ["Sheet1", "Sheet2"]}
-        )
-        assert_frame_equal(dn.read()["Sheet1"], default_multi_sheet_data_frame["Sheet1"])
-        assert_frame_equal(dn.read()["Sheet2"], default_multi_sheet_data_frame["Sheet2"])
-
-        dn.append(content)
-
-        assert_frame_equal(
-            dn.read()["Sheet1"],
-            pd.concat(
-                [default_multi_sheet_data_frame["Sheet1"], pd.DataFrame(content["Sheet1"], columns=["a", "b", "c"])]
-            ).reset_index(drop=True),
-        )
-        assert_frame_equal(
-            dn.read()["Sheet2"],
-            pd.concat(
-                [default_multi_sheet_data_frame["Sheet2"], pd.DataFrame(content["Sheet2"], columns=["a", "b", "c"])]
-            ).reset_index(drop=True),
-        )
-
-    @pytest.mark.parametrize(
-        "content",
-        [
-            ({"Sheet1": pd.DataFrame([{"a": 11, "b": 22, "c": 33}])}),
-            (pd.DataFrame({"a": [11, 44], "b": [22, 55], "c": [33, 66]})),
-            ([[11, 22, 33], [44, 55, 66]]),
-        ],
-    )
-    def test_append_only_first_sheet_of_a_multisheet_file(
-        self, excel_file_with_multi_sheet, default_multi_sheet_data_frame, content
-    ):
-        dn = ExcelDataNode(
-            "foo", Scope.SCENARIO, properties={"path": excel_file_with_multi_sheet, "sheet_name": ["Sheet1", "Sheet2"]}
-        )
-        assert_frame_equal(dn.read()["Sheet1"], default_multi_sheet_data_frame["Sheet1"])
-        assert_frame_equal(dn.read()["Sheet2"], default_multi_sheet_data_frame["Sheet2"])
-
-        dn.append(content)
-
-        appended_content = content["Sheet1"] if isinstance(content, dict) else content
-        assert_frame_equal(
-            dn.read()["Sheet1"],
-            pd.concat(
-                [default_multi_sheet_data_frame["Sheet1"], pd.DataFrame(appended_content, columns=["a", "b", "c"])]
-            ).reset_index(drop=True),
-        )
-        assert_frame_equal(dn.read()["Sheet2"], default_multi_sheet_data_frame["Sheet2"])
-
-    @pytest.mark.parametrize(
-        "content",
-        [
-            ([{"a": 11, "b": 22, "c": 33}, {"a": 44, "b": 55, "c": 66}]),
-            (modin_pd.DataFrame([{"a": 11, "b": 22, "c": 33}, {"a": 44, "b": 55, "c": 66}])),
-            ([[11, 22, 33], [44, 55, 66]]),
-        ],
-    )
-    def test_append_modin_with_sheetname(self, excel_file, default_data_frame, content):
-        dn = ExcelDataNode(
-            "foo", Scope.SCENARIO, properties={"path": excel_file, "sheet_name": "Sheet1", "exposed_type": "modin"}
-        )
-        df_equals(dn.read(), modin_pd.DataFrame(default_data_frame))
-
-        dn.append(content)
-        df_equals(
-            dn.read(),
-            modin_pd.concat(
-                [modin_pd.DataFrame(default_data_frame), modin_pd.DataFrame(content, columns=["a", "b", "c"])]
-            ).reset_index(drop=True),
-        )
-
-    @pytest.mark.parametrize(
-        "content",
-        [
-            ([{"a": 11, "b": 22, "c": 33}, {"a": 44, "b": 55, "c": 66}]),
-            (modin_pd.DataFrame([{"a": 11, "b": 22, "c": 33}, {"a": 44, "b": 55, "c": 66}])),
-            ([[11, 22, 33], [44, 55, 66]]),
-        ],
-    )
-    def test_append_modin_without_sheetname(self, excel_file, default_data_frame, content):
-        dn = ExcelDataNode("foo", Scope.SCENARIO, properties={"path": excel_file, "exposed_type": "modin"})
-        df_equals(dn.read()["Sheet1"], default_data_frame)
-
-        dn.append(content)
-        df_equals(
-            dn.read()["Sheet1"],
-            modin_pd.concat([default_data_frame, modin_pd.DataFrame(content, columns=["a", "b", "c"])]).reset_index(
-                drop=True
-            ),
-        )
-
-    @pytest.mark.parametrize(
-        "content",
-        [
-            (
-                {
-                    "Sheet1": modin_pd.DataFrame([{"a": 11, "b": 22, "c": 33}]),
-                    "Sheet2": modin_pd.DataFrame([{"a": 44, "b": 55, "c": 66}]),
-                }
-            ),
-            (
-                {
-                    "Sheet1": modin_pd.DataFrame({"a": [11, 44], "b": [22, 55], "c": [33, 66]}),
-                    "Sheet2": modin_pd.DataFrame([{"a": 77, "b": 88, "c": 99}]),
-                }
-            ),
-            ({"Sheet1": np.array([[11, 22, 33], [44, 55, 66]]), "Sheet2": np.array([[77, 88, 99]])}),
-        ],
-    )
-    def test_append_modin_multisheet(self, excel_file_with_multi_sheet, default_multi_sheet_data_frame, content):
-        dn = ExcelDataNode(
-            "foo",
-            Scope.SCENARIO,
-            properties={
-                "path": excel_file_with_multi_sheet,
-                "sheet_name": ["Sheet1", "Sheet2"],
-                "exposed_type": "modin",
-            },
-        )
-        df_equals(dn.read()["Sheet1"], default_multi_sheet_data_frame["Sheet1"])
-        df_equals(dn.read()["Sheet2"], default_multi_sheet_data_frame["Sheet2"])
-
-        dn.append(content)
-
-        df_equals(
-            dn.read()["Sheet1"],
-            modin_pd.concat(
-                [
-                    default_multi_sheet_data_frame["Sheet1"],
-                    modin_pd.DataFrame(content["Sheet1"], columns=["a", "b", "c"]),
-                ]
-            ).reset_index(drop=True),
-        )
-        df_equals(
-            dn.read()["Sheet2"],
-            modin_pd.concat(
-                [
-                    default_multi_sheet_data_frame["Sheet2"],
-                    modin_pd.DataFrame(content["Sheet2"], columns=["a", "b", "c"]),
-                ]
-            ).reset_index(drop=True),
-        )
-
-    def test_filter_pandas_exposed_type_with_sheetname(self, excel_file):
-        dn = ExcelDataNode(
-            "foo", Scope.SCENARIO, properties={"path": excel_file, "sheet_name": "Sheet1", "exposed_type": "pandas"}
-        )
-        dn.write(
-            [
-                {"foo": 1, "bar": 1},
-                {"foo": 1, "bar": 2},
-                {"foo": 1},
-                {"foo": 2, "bar": 2},
-                {"bar": 2},
-            ]
-        )
-
-        # Test datanode indexing and slicing
-        assert dn["foo"].equals(pd.Series([1, 1, 1, 2, None]))
-        assert dn["bar"].equals(pd.Series([1, 2, None, 2, 2]))
-        assert dn[:2].equals(pd.DataFrame([{"foo": 1.0, "bar": 1.0}, {"foo": 1.0, "bar": 2.0}]))
-
-        # Test filter data
-        filtered_by_filter_method = dn.filter(("foo", 1, Operator.EQUAL))
-        filtered_by_indexing = dn[dn["foo"] == 1]
-        expected_data = pd.DataFrame([{"foo": 1.0, "bar": 1.0}, {"foo": 1.0, "bar": 2.0}, {"foo": 1.0}])
-        assert_frame_equal(filtered_by_filter_method.reset_index(drop=True), expected_data)
-        assert_frame_equal(filtered_by_indexing.reset_index(drop=True), expected_data)
-
-        filtered_by_filter_method = dn.filter(("foo", 1, Operator.NOT_EQUAL))
-        filtered_by_indexing = dn[dn["foo"] != 1]
-        expected_data = pd.DataFrame([{"foo": 2.0, "bar": 2.0}, {"bar": 2.0}])
-        assert_frame_equal(filtered_by_filter_method.reset_index(drop=True), expected_data)
-        assert_frame_equal(filtered_by_indexing.reset_index(drop=True), expected_data)
-
-        filtered_by_filter_method = dn.filter(("bar", 2, Operator.EQUAL))
-        filtered_by_indexing = dn[dn["bar"] == 2]
-        expected_data = pd.DataFrame([{"foo": 1.0, "bar": 2.0}, {"foo": 2.0, "bar": 2.0}, {"bar": 2.0}])
-        assert_frame_equal(filtered_by_filter_method.reset_index(drop=True), expected_data)
-        assert_frame_equal(filtered_by_indexing.reset_index(drop=True), expected_data)
-
-        filtered_by_filter_method = dn.filter([("bar", 1, Operator.EQUAL), ("bar", 2, Operator.EQUAL)], JoinOperator.OR)
-        filtered_by_indexing = dn[(dn["bar"] == 1) | (dn["bar"] == 2)]
-        expected_data = pd.DataFrame(
-            [
-                {"foo": 1.0, "bar": 1.0},
-                {"foo": 1.0, "bar": 2.0},
-                {"foo": 2.0, "bar": 2.0},
-                {"bar": 2.0},
-            ]
-        )
-        assert_frame_equal(filtered_by_filter_method.reset_index(drop=True), expected_data)
-        assert_frame_equal(filtered_by_indexing.reset_index(drop=True), expected_data)
-
-    def test_filter_pandas_exposed_type_without_sheetname(self, excel_file):
-        dn = ExcelDataNode("foo", Scope.SCENARIO, properties={"path": excel_file, "exposed_type": "pandas"})
-        dn.write(
-            [
-                {"foo": 1, "bar": 1},
-                {"foo": 1, "bar": 2},
-                {"foo": 1},
-                {"foo": 2, "bar": 2},
-                {"bar": 2},
-            ]
-        )
-
-        assert len(dn.filter(("foo", 1, Operator.EQUAL))["Sheet1"]) == 3
-        assert len(dn.filter(("foo", 1, Operator.NOT_EQUAL))["Sheet1"]) == 2
-        assert len(dn.filter(("bar", 2, Operator.EQUAL))["Sheet1"]) == 3
-        assert len(dn.filter([("bar", 1, Operator.EQUAL), ("bar", 2, Operator.EQUAL)], JoinOperator.OR)["Sheet1"]) == 4
-
-        assert dn["Sheet1"]["foo"].equals(pd.Series([1, 1, 1, 2, None]))
-        assert dn["Sheet1"]["bar"].equals(pd.Series([1, 2, None, 2, 2]))
-        assert dn["Sheet1"][:2].equals(pd.DataFrame([{"foo": 1.0, "bar": 1.0}, {"foo": 1.0, "bar": 2.0}]))
-
-    def test_filter_pandas_exposed_type_multisheet(self, excel_file):
-        dn = ExcelDataNode(
-            "foo",
-            Scope.SCENARIO,
-            properties={"path": excel_file, "sheet_name": ["sheet_1", "sheet_2"], "exposed_type": "pandas"},
-        )
-        dn.write(
-            {
-                "sheet_1": pd.DataFrame(
-                    [
-                        {"foo": 1, "bar": 1},
-                        {"foo": 1, "bar": 2},
-                        {"foo": 1},
-                        {"foo": 2, "bar": 2},
-                        {"bar": 2},
-                    ]
-                ),
-                "sheet_2": pd.DataFrame(
-                    [
-                        {"foo": 1, "bar": 3},
-                        {"foo": 1, "bar": 4},
-                        {"foo": 1},
-                        {"foo": 2, "bar": 4},
-                        {"bar": 4},
-                    ]
-                ),
-            }
-        )
-
-        assert len(dn.filter(("foo", 1, Operator.EQUAL))) == 2
-        assert len(dn.filter(("foo", 1, Operator.EQUAL))["sheet_1"]) == 3
-        assert len(dn.filter(("foo", 1, Operator.EQUAL))["sheet_2"]) == 3
-
-        assert len(dn.filter(("foo", 1, Operator.NOT_EQUAL))) == 2
-        assert len(dn.filter(("foo", 1, Operator.NOT_EQUAL))["sheet_1"]) == 2
-        assert len(dn.filter(("foo", 1, Operator.NOT_EQUAL))["sheet_2"]) == 2
-
-        assert len(dn.filter(("bar", 2, Operator.EQUAL))) == 2
-        assert len(dn.filter(("bar", 2, Operator.EQUAL))["sheet_1"]) == 3
-        assert len(dn.filter(("bar", 2, Operator.EQUAL))["sheet_2"]) == 0
-
-        assert len(dn.filter([("bar", 1, Operator.EQUAL), ("bar", 2, Operator.EQUAL)], JoinOperator.OR)) == 2
-        assert len(dn.filter([("bar", 1, Operator.EQUAL), ("bar", 2, Operator.EQUAL)], JoinOperator.OR)["sheet_1"]) == 4
-        assert len(dn.filter([("bar", 1, Operator.EQUAL), ("bar", 2, Operator.EQUAL)], JoinOperator.OR)["sheet_2"]) == 0
-
-        assert dn["sheet_1"]["foo"].equals(pd.Series([1, 1, 1, 2, None]))
-        assert dn["sheet_2"]["foo"].equals(pd.Series([1, 1, 1, 2, None]))
-        assert dn["sheet_1"]["bar"].equals(pd.Series([1, 2, None, 2, 2]))
-        assert dn["sheet_2"]["bar"].equals(pd.Series([3, 4, None, 4, 4]))
-        assert dn["sheet_1"][:2].equals(pd.DataFrame([{"foo": 1.0, "bar": 1.0}, {"foo": 1.0, "bar": 2.0}]))
-        assert dn["sheet_2"][:2].equals(pd.DataFrame([{"foo": 1.0, "bar": 3.0}, {"foo": 1.0, "bar": 4.0}]))
-
-    def test_filter_modin_exposed_type_with_sheetname(self, excel_file):
-        dn = ExcelDataNode(
-            "foo", Scope.SCENARIO, properties={"path": excel_file, "sheet_name": "Sheet1", "exposed_type": "modin"}
-        )
-        dn.write(
-            [
-                {"foo": 1, "bar": 1},
-                {"foo": 1, "bar": 2},
-                {"foo": 1},
-                {"foo": 2, "bar": 2},
-                {"bar": 2},
-            ]
-        )
-
-        # Test datanode indexing and slicing
-        assert dn["foo"].equals(modin_pd.Series([1, 1, 1, 2, None]))
-        assert dn["bar"].equals(modin_pd.Series([1, 2, None, 2, 2]))
-        assert dn[:2].equals(modin_pd.DataFrame([{"foo": 1.0, "bar": 1.0}, {"foo": 1.0, "bar": 2.0}]))
-
-        # Test filter data
-        filtered_by_filter_method = dn.filter(("foo", 1, Operator.EQUAL))
-        filtered_by_indexing = dn[dn["foo"] == 1]
-        expected_data = modin_pd.DataFrame([{"foo": 1.0, "bar": 1.0}, {"foo": 1.0, "bar": 2.0}, {"foo": 1.0}])
-        df_equals(filtered_by_filter_method.reset_index(drop=True), expected_data)
-        df_equals(filtered_by_indexing.reset_index(drop=True), expected_data)
-
-        filtered_by_filter_method = dn.filter(("foo", 1, Operator.NOT_EQUAL))
-        filtered_by_indexing = dn[dn["foo"] != 1]
-        expected_data = modin_pd.DataFrame([{"foo": 2.0, "bar": 2.0}, {"bar": 2.0}])
-        df_equals(filtered_by_filter_method.reset_index(drop=True), expected_data)
-        df_equals(filtered_by_indexing.reset_index(drop=True), expected_data)
-
-        filtered_by_filter_method = dn.filter(("bar", 2, Operator.EQUAL))
-        filtered_by_indexing = dn[dn["bar"] == 2]
-        expected_data = modin_pd.DataFrame([{"foo": 1.0, "bar": 2.0}, {"foo": 2.0, "bar": 2.0}, {"bar": 2.0}])
-        df_equals(filtered_by_filter_method.reset_index(drop=True), expected_data)
-        df_equals(filtered_by_indexing.reset_index(drop=True), expected_data)
-
-        filtered_by_filter_method = dn.filter([("bar", 1, Operator.EQUAL), ("bar", 2, Operator.EQUAL)], JoinOperator.OR)
-        filtered_by_indexing = dn[(dn["bar"] == 1) | (dn["bar"] == 2)]
-        expected_data = modin_pd.DataFrame(
-            [
-                {"foo": 1.0, "bar": 1.0},
-                {"foo": 1.0, "bar": 2.0},
-                {"foo": 2.0, "bar": 2.0},
-                {"bar": 2.0},
-            ]
-        )
-        df_equals(filtered_by_filter_method.reset_index(drop=True), expected_data)
-        df_equals(filtered_by_indexing.reset_index(drop=True), expected_data)
-
-    def test_filter_modin_exposed_type_without_sheetname(self, excel_file):
-        dn = ExcelDataNode("foo", Scope.SCENARIO, properties={"path": excel_file, "exposed_type": "modin"})
-        dn.write(
-            [
-                {"foo": 1, "bar": 1},
-                {"foo": 1, "bar": 2},
-                {"foo": 1},
-                {"foo": 2, "bar": 2},
-                {"bar": 2},
-            ]
-        )
-
-        assert len(dn.filter(("foo", 1, Operator.EQUAL))["Sheet1"]) == 3
-        assert len(dn.filter(("foo", 1, Operator.NOT_EQUAL))["Sheet1"]) == 2
-        assert len(dn.filter(("bar", 2, Operator.EQUAL))["Sheet1"]) == 3
-        assert len(dn.filter([("bar", 1, Operator.EQUAL), ("bar", 2, Operator.EQUAL)], JoinOperator.OR)["Sheet1"]) == 4
-
-        assert dn["Sheet1"]["foo"].equals(modin_pd.Series([1, 1, 1, 2, None]))
-        assert dn["Sheet1"]["bar"].equals(modin_pd.Series([1, 2, None, 2, 2]))
-        assert dn["Sheet1"][:2].equals(modin_pd.DataFrame([{"foo": 1.0, "bar": 1.0}, {"foo": 1.0, "bar": 2.0}]))
-
-    def test_filter_modin_exposed_type_multisheet(self, excel_file):
-        dn = ExcelDataNode(
-            "foo",
-            Scope.SCENARIO,
-            properties={"path": excel_file, "sheet_name": ["sheet_1", "sheet_2"], "exposed_type": "modin"},
-        )
-        dn.write(
-            {
-                "sheet_1": pd.DataFrame(
-                    [
-                        {"foo": 1, "bar": 1},
-                        {"foo": 1, "bar": 2},
-                        {"foo": 1},
-                        {"foo": 2, "bar": 2},
-                        {"bar": 2},
-                    ]
-                ),
-                "sheet_2": pd.DataFrame(
-                    [
-                        {"foo": 1, "bar": 3},
-                        {"foo": 1, "bar": 4},
-                        {"foo": 1},
-                        {"foo": 2, "bar": 4},
-                        {"bar": 4},
-                    ]
-                ),
-            }
-        )
-
-        assert len(dn.filter(("foo", 1, Operator.EQUAL))) == 2
-        assert len(dn.filter(("foo", 1, Operator.EQUAL))["sheet_1"]) == 3
-        assert len(dn.filter(("foo", 1, Operator.EQUAL))["sheet_2"]) == 3
-
-        assert len(dn.filter(("foo", 1, Operator.NOT_EQUAL))) == 2
-        assert len(dn.filter(("foo", 1, Operator.NOT_EQUAL))["sheet_1"]) == 2
-        assert len(dn.filter(("foo", 1, Operator.NOT_EQUAL))["sheet_2"]) == 2
-
-        assert len(dn.filter(("bar", 2, Operator.EQUAL))) == 2
-        assert len(dn.filter(("bar", 2, Operator.EQUAL))["sheet_1"]) == 3
-        assert len(dn.filter(("bar", 2, Operator.EQUAL))["sheet_2"]) == 0
-
-        assert len(dn.filter([("bar", 1, Operator.EQUAL), ("bar", 2, Operator.EQUAL)], JoinOperator.OR)) == 2
-        assert len(dn.filter([("bar", 1, Operator.EQUAL), ("bar", 2, Operator.EQUAL)], JoinOperator.OR)["sheet_1"]) == 4
-        assert len(dn.filter([("bar", 1, Operator.EQUAL), ("bar", 2, Operator.EQUAL)], JoinOperator.OR)["sheet_2"]) == 0
-
-        assert dn["sheet_1"]["foo"].equals(modin_pd.Series([1, 1, 1, 2, None]))
-        assert dn["sheet_2"]["foo"].equals(modin_pd.Series([1, 1, 1, 2, None]))
-        assert dn["sheet_1"]["bar"].equals(modin_pd.Series([1, 2, None, 2, 2]))
-        assert dn["sheet_2"]["bar"].equals(modin_pd.Series([3, 4, None, 4, 4]))
-        assert dn["sheet_1"][:2].equals(modin_pd.DataFrame([{"foo": 1.0, "bar": 1.0}, {"foo": 1.0, "bar": 2.0}]))
-        assert dn["sheet_2"][:2].equals(modin_pd.DataFrame([{"foo": 1.0, "bar": 3.0}, {"foo": 1.0, "bar": 4.0}]))
-
-    def test_filter_numpy_exposed_type_with_sheetname(self, excel_file):
-        dn = ExcelDataNode(
-            "foo", Scope.SCENARIO, properties={"path": excel_file, "sheet_name": "Sheet1", "exposed_type": "numpy"}
-        )
-        dn.write(
-            [
-                [1, 1],
-                [1, 2],
-                [1, 3],
-                [2, 1],
-                [2, 2],
-                [2, 3],
-            ]
-        )
-
-        # Test datanode indexing and slicing
-        assert np.array_equal(dn[0], np.array([1, 1]))
-        assert np.array_equal(dn[1], np.array([1, 2]))
-        assert np.array_equal(dn[:3], np.array([[1, 1], [1, 2], [1, 3]]))
-        assert np.array_equal(dn[:, 0], np.array([1, 1, 1, 2, 2, 2]))
-        assert np.array_equal(dn[1:4, :1], np.array([[1], [1], [2]]))
-
-        # Test filter data
-        assert np.array_equal(dn.filter((0, 1, Operator.EQUAL)), np.array([[1, 1], [1, 2], [1, 3]]))
-        assert np.array_equal(dn[dn[:, 0] == 1], np.array([[1, 1], [1, 2], [1, 3]]))
-
-        assert np.array_equal(dn.filter((0, 1, Operator.NOT_EQUAL)), np.array([[2, 1], [2, 2], [2, 3]]))
-        assert np.array_equal(dn[dn[:, 0] != 1], np.array([[2, 1], [2, 2], [2, 3]]))
-
-        assert np.array_equal(dn.filter((1, 2, Operator.EQUAL)), np.array([[1, 2], [2, 2]]))
-        assert np.array_equal(dn[dn[:, 1] == 2], np.array([[1, 2], [2, 2]]))
-
-        assert np.array_equal(
-            dn.filter([(1, 1, Operator.EQUAL), (1, 2, Operator.EQUAL)], JoinOperator.OR),
-            np.array([[1, 1], [1, 2], [2, 1], [2, 2]]),
-        )
-        assert np.array_equal(dn[(dn[:, 1] == 1) | (dn[:, 1] == 2)], np.array([[1, 1], [1, 2], [2, 1], [2, 2]]))
-
-    def test_filter_numpy_exposed_type_without_sheetname(self, excel_file):
-        dn = ExcelDataNode("foo", Scope.SCENARIO, properties={"path": excel_file, "exposed_type": "numpy"})
-        dn.write(
-            [
-                [1, 1],
-                [1, 2],
-                [1, 3],
-                [2, 1],
-                [2, 2],
-                [2, 3],
-            ]
-        )
-
-        assert len(dn.filter((0, 1, Operator.EQUAL))["Sheet1"]) == 3
-        assert len(dn.filter((0, 1, Operator.NOT_EQUAL))["Sheet1"]) == 3
-        assert len(dn.filter((1, 2, Operator.EQUAL))["Sheet1"]) == 2
-        assert len(dn.filter([(0, 1, Operator.EQUAL), (1, 2, Operator.EQUAL)], JoinOperator.OR)["Sheet1"]) == 4
-
-        assert np.array_equal(dn["Sheet1"][0], np.array([1, 1]))
-        assert np.array_equal(dn["Sheet1"][1], np.array([1, 2]))
-        assert np.array_equal(dn["Sheet1"][:3], np.array([[1, 1], [1, 2], [1, 3]]))
-        assert np.array_equal(dn["Sheet1"][:, 0], np.array([1, 1, 1, 2, 2, 2]))
-        assert np.array_equal(dn["Sheet1"][1:4, :1], np.array([[1], [1], [2]]))
-
-    def test_filter_numpy_exposed_type_multisheet(self, excel_file):
-        dn = ExcelDataNode(
-            "foo",
-            Scope.SCENARIO,
-            properties={"path": excel_file, "sheet_name": ["sheet_1", "sheet_2"], "exposed_type": "numpy"},
-        )
-        dn.write(
-            {
-                "sheet_1": pd.DataFrame(
-                    [
-                        [1, 1],
-                        [1, 2],
-                        [1, 3],
-                        [2, 1],
-                        [2, 2],
-                        [2, 3],
-                    ]
-                ),
-                "sheet_2": pd.DataFrame(
-                    [
-                        [1, 4],
-                        [1, 5],
-                        [1, 6],
-                        [2, 4],
-                        [2, 5],
-                        [2, 6],
-                    ]
-                ),
-            }
-        )
-
-        assert len(dn.filter((0, 1, Operator.EQUAL))) == 2
-        assert len(dn.filter((0, 1, Operator.EQUAL))["sheet_1"]) == 3
-        assert len(dn.filter((0, 1, Operator.EQUAL))["sheet_2"]) == 3
-
-        assert len(dn.filter((0, 1, Operator.NOT_EQUAL))) == 2
-        assert len(dn.filter((0, 1, Operator.NOT_EQUAL))["sheet_1"]) == 3
-        assert len(dn.filter((0, 1, Operator.NOT_EQUAL))["sheet_2"]) == 3
-
-        assert len(dn.filter((1, 2, Operator.EQUAL))) == 2
-        assert len(dn.filter((1, 2, Operator.EQUAL))["sheet_1"]) == 2
-        assert len(dn.filter((1, 2, Operator.EQUAL))["sheet_2"]) == 0
-
-        assert len(dn.filter([(1, 1, Operator.EQUAL), (1, 2, Operator.EQUAL)], JoinOperator.OR)) == 2
-        assert len(dn.filter([(1, 1, Operator.EQUAL), (1, 2, Operator.EQUAL)], JoinOperator.OR)["sheet_1"]) == 4
-        assert len(dn.filter([(1, 1, Operator.EQUAL), (1, 2, Operator.EQUAL)], JoinOperator.OR)["sheet_2"]) == 0
-
-        assert np.array_equal(dn["sheet_1"][0], np.array([1, 1]))
-        assert np.array_equal(dn["sheet_2"][0], np.array([1, 4]))
-        assert np.array_equal(dn["sheet_1"][1], np.array([1, 2]))
-        assert np.array_equal(dn["sheet_2"][1], np.array([1, 5]))
-        assert np.array_equal(dn["sheet_1"][:3], np.array([[1, 1], [1, 2], [1, 3]]))
-        assert np.array_equal(dn["sheet_2"][:3], np.array([[1, 4], [1, 5], [1, 6]]))
-        assert np.array_equal(dn["sheet_1"][:, 0], np.array([1, 1, 1, 2, 2, 2]))
-        assert np.array_equal(dn["sheet_2"][:, 1], np.array([4, 5, 6, 4, 5, 6]))
-        assert np.array_equal(dn["sheet_1"][1:4, :1], np.array([[1], [1], [2]]))
-        assert np.array_equal(dn["sheet_2"][1:4, 1:2], np.array([[5], [6], [4]]))
+        props = {"path": path, "sheet_name": "Sheet1", "exposed_type": "modin"}
+        modin_dn = ExcelDataNode("bar", Scope.SCENARIO, properties=props)
+        assert modin_dn.properties["exposed_type"] == "pandas"
+        data_modin = modin_dn.read()
+        assert isinstance(data_modin, pd.DataFrame)
 
     def test_set_path(self):
         dn = ExcelDataNode("foo", Scope.SCENARIO, properties={"default_path": "foo.xlsx"})
@@ -1512,12 +179,13 @@ class TestExcelDataNode:
     @pytest.mark.parametrize(
         ["properties", "exists"],
         [
-            ({}, False),
             ({"default_data": {"a": ["foo", "bar"]}}, True),
+            ({}, False),
         ],
     )
     def test_create_with_default_data(self, properties, exists):
-        dn = ExcelDataNode("foo", Scope.SCENARIO, DataNodeId("dn_id"), properties=properties)
+        dn = ExcelDataNode("foo", Scope.SCENARIO, DataNodeId(f"dn_id_{uuid.uuid4()}"), properties=properties)
+        assert dn.path == f"{Config.core.storage_folder}excels/{dn.id}.xlsx"
         assert os.path.exists(dn.path) is exists
 
     def test_read_write_after_modify_path(self):
@@ -1539,7 +207,7 @@ class TestExcelDataNode:
             pathlib.Path(__file__).parent.resolve(), "data_sample/example_2.xlsx"
         )  # ["Sheet1", "Sheet2", "Sheet3"]
         dn = ExcelDataNode("foo", Scope.SCENARIO, properties={"default_path": path, "exposed_type": MyCustomObject1})
-        assert dn.exposed_type == MyCustomObject1
+        assert dn.properties["exposed_type"] == MyCustomObject1
         dn.read()
         dn.path = new_path
         dn.read()
@@ -1549,7 +217,7 @@ class TestExcelDataNode:
             Scope.SCENARIO,
             properties={"default_path": path, "exposed_type": MyCustomObject1, "sheet_name": ["Sheet4"]},
         )
-        assert dn.exposed_type == MyCustomObject1
+        assert dn.properties["exposed_type"] == MyCustomObject1
         with pytest.raises(NonExistingExcelSheet):
             dn.read()
 
@@ -1599,14 +267,14 @@ class TestExcelDataNode:
             "foo", Scope.SCENARIO, properties={"default_path": "notexistyet.xlsx", "exposed_type": MyCustomObject1}
         )
         assert dn.path == "notexistyet.xlsx"
-        assert dn.exposed_type == MyCustomObject1
+        assert dn.properties["exposed_type"] == MyCustomObject1
         dn = ExcelDataNode(
             "foo",
             Scope.SCENARIO,
             properties={"default_path": "notexistyet.xlsx", "exposed_type": [MyCustomObject1, MyCustomObject2]},
         )
         assert dn.path == "notexistyet.xlsx"
-        assert dn.exposed_type == [MyCustomObject1, MyCustomObject2]
+        assert dn.properties["exposed_type"] == [MyCustomObject1, MyCustomObject2]
         dn = ExcelDataNode(
             "foo",
             Scope.SCENARIO,
@@ -1616,12 +284,12 @@ class TestExcelDataNode:
             },
         )
         assert dn.path == "notexistyet.xlsx"
-        assert dn.exposed_type == {"Sheet1": MyCustomObject1, "Sheet2": MyCustomObject2}
+        assert dn.properties["exposed_type"] == {"Sheet1": MyCustomObject1, "Sheet2": MyCustomObject2}
 
     def test_exposed_type_default(self):
         path = os.path.join(pathlib.Path(__file__).parent.resolve(), "data_sample/example.xlsx")
         dn = ExcelDataNode("foo", Scope.SCENARIO, properties={"default_path": path, "sheet_name": "Sheet1"})
-        assert dn.exposed_type == "pandas"
+        assert dn.properties["exposed_type"] == "pandas"
         data = dn.read()
         assert isinstance(data, pd.DataFrame)
 
@@ -1630,9 +298,103 @@ class TestExcelDataNode:
         dn = ExcelDataNode(
             "foo", Scope.SCENARIO, properties={"default_path": path, "exposed_type": "pandas", "sheet_name": "Sheet1"}
         )
-        assert dn.exposed_type == "pandas"
+        assert dn.properties["exposed_type"] == "pandas"
         data = dn.read()
         assert isinstance(data, pd.DataFrame)
+
+    def test_pandas_dataframe_exposed_type(self):
+        path = os.path.join(pathlib.Path(__file__).parent.resolve(), "data_sample/example.xlsx")
+        dn = ExcelDataNode(
+            "foo",
+            Scope.SCENARIO,
+            properties={"default_path": path, "exposed_type": pd.DataFrame, "sheet_name": "Sheet1"},
+        )
+        assert dn.properties["exposed_type"] == pd.DataFrame
+        data = dn.read()
+        assert isinstance(data, pd.DataFrame)
+
+    def test_pandas_dataframe_exposed_type_a(self):
+        import pandas
+
+        path = os.path.join(pathlib.Path(__file__).parent.resolve(), "data_sample/example.xlsx")
+        dn = ExcelDataNode(
+            "foo",
+            Scope.SCENARIO,
+            properties={"default_path": path, "exposed_type": pandas.DataFrame, "sheet_name": "Sheet1"},
+        )
+        assert dn.properties["exposed_type"] == pandas.DataFrame
+        data = dn.read()
+        assert isinstance(data, pandas.DataFrame)
+
+    def test_pandas_dataframe_exposed_type_b(self):
+        from pandas import DataFrame
+
+        path = os.path.join(pathlib.Path(__file__).parent.resolve(), "data_sample/example.xlsx")
+        dn = ExcelDataNode(
+            "foo",
+            Scope.SCENARIO,
+            properties={"default_path": path, "exposed_type": DataFrame, "sheet_name": "Sheet1"},
+        )
+        assert dn.properties["exposed_type"] == DataFrame
+        data = dn.read()
+        assert isinstance(data, DataFrame)
+
+    def test_pandas_dataframe_exposed_type_c(self):
+        from pandas import DataFrame as DF
+
+        path = os.path.join(pathlib.Path(__file__).parent.resolve(), "data_sample/example.xlsx")
+        dn = ExcelDataNode(
+            "foo",
+            Scope.SCENARIO,
+            properties={"default_path": path, "exposed_type": DF, "sheet_name": "Sheet1"},
+        )
+        assert dn.properties["exposed_type"] == DF
+        data = dn.read()
+        assert isinstance(data, DF)
+
+    def test_numpy_ndarray_exposed_type(self):
+        path = os.path.join(pathlib.Path(__file__).parent.resolve(), "data_sample/example.xlsx")
+        dn = ExcelDataNode(
+            "foo", Scope.SCENARIO, properties={"default_path": path, "exposed_type": np.ndarray, "sheet_name": "Sheet1"}
+        )
+        assert dn.properties["exposed_type"] == np.ndarray
+        data = dn.read()
+        assert isinstance(data, np.ndarray)
+
+    def test_numpy_ndarray_exposed_type_a(self):
+        import numpy
+
+        path = os.path.join(pathlib.Path(__file__).parent.resolve(), "data_sample/example.xlsx")
+        dn = ExcelDataNode(
+            "foo",
+            Scope.SCENARIO,
+            properties={"default_path": path, "exposed_type": numpy.ndarray, "sheet_name": "Sheet1"},
+        )
+        assert dn.properties["exposed_type"] == numpy.ndarray
+        data = dn.read()
+        assert isinstance(data, numpy.ndarray)
+
+    def test_numpy_ndarray_exposed_type_b(self):
+        from numpy import ndarray
+
+        path = os.path.join(pathlib.Path(__file__).parent.resolve(), "data_sample/example.xlsx")
+        dn = ExcelDataNode(
+            "foo", Scope.SCENARIO, properties={"default_path": path, "exposed_type": ndarray, "sheet_name": "Sheet1"}
+        )
+        assert dn.properties["exposed_type"] == ndarray
+        data = dn.read()
+        assert isinstance(data, ndarray)
+
+    def test_numpy_ndarray_exposed_type_c(self):
+        from numpy import ndarray as nd_array
+
+        path = os.path.join(pathlib.Path(__file__).parent.resolve(), "data_sample/example.xlsx")
+        dn = ExcelDataNode(
+            "foo", Scope.SCENARIO, properties={"default_path": path, "exposed_type": nd_array, "sheet_name": "Sheet1"}
+        )
+        assert dn.properties["exposed_type"] == nd_array
+        data = dn.read()
+        assert isinstance(data, nd_array)
 
     def test_complex_exposed_type_dict(self):
         # ["Sheet1", "Sheet2", "Sheet3", "Sheet4", "Sheet5"]
@@ -1730,3 +492,163 @@ class TestExcelDataNode:
         dn.write(pd.DataFrame([7, 8, 9]))
         assert new_edit_date < dn.last_edit_date
         os.unlink(temp_file_path)
+
+    def test_migrate_to_new_path(self, tmp_path):
+        _base_path = os.path.join(tmp_path, ".data")
+        path = os.path.join(_base_path, "test.xlsx")
+        # create a file on old path
+        os.mkdir(_base_path)
+        with open(path, "w"):
+            pass
+
+        dn = ExcelDataNode("foo", Scope.SCENARIO, properties={"path": path, "exposed_type": "pandas"})
+
+        assert ".data" not in dn.path
+        assert os.path.exists(dn.path)
+
+    def test_is_downloadable(self):
+        path = os.path.join(pathlib.Path(__file__).parent.resolve(), "data_sample/example.xlsx")
+        dn = ExcelDataNode("foo", Scope.SCENARIO, properties={"path": path, "exposed_type": "pandas"})
+        reasons = dn.is_downloadable()
+        assert reasons
+        assert reasons.reasons == ""
+
+    def test_is_not_downloadable_no_file(self):
+        path = os.path.join(pathlib.Path(__file__).parent.resolve(), "data_sample/wrong_path.xlsx")
+        dn = ExcelDataNode("foo", Scope.SCENARIO, properties={"path": path, "exposed_type": "pandas"})
+        reasons = dn.is_downloadable()
+        assert not reasons
+        assert len(reasons._reasons) == 1
+        assert str(NoFileToDownload(_normalize_path(path), dn.id)) in reasons.reasons
+
+    def test_is_not_downloadable_not_a_file(self):
+        path = os.path.join(pathlib.Path(__file__).parent.resolve(), "data_sample")
+        dn = ExcelDataNode("foo", Scope.SCENARIO, properties={"path": path, "exposed_type": "pandas"})
+        reasons = dn.is_downloadable()
+        assert not reasons
+        assert len(reasons._reasons) == 1
+        assert str(NotAFile(_normalize_path(path), dn.id)) in reasons.reasons
+
+    def test_get_download_path(self):
+        path = os.path.join(pathlib.Path(__file__).parent.resolve(), "data_sample/example.xlsx")
+        dn = ExcelDataNode("foo", Scope.SCENARIO, properties={"path": path, "exposed_type": "pandas"})
+        assert re.split(r"[\\/]", dn._get_downloadable_path()) == re.split(r"[\\/]", path)
+
+    def test_get_downloadable_path_with_not_existing_file(self):
+        dn = ExcelDataNode("foo", Scope.SCENARIO, properties={"path": "NOT_EXISTING.xlsx", "exposed_type": "pandas"})
+        assert dn._get_downloadable_path() == ""
+
+    def test_upload(self, excel_file, tmpdir_factory):
+        old_xlsx_path = tmpdir_factory.mktemp("data").join("df.xlsx").strpath
+        old_data = pd.DataFrame([{"a": 0, "b": 1, "c": 2}, {"a": 3, "b": 4, "c": 5}])
+
+        dn = ExcelDataNode("foo", Scope.SCENARIO, properties={"path": old_xlsx_path, "exposed_type": "pandas"})
+        dn.write(old_data)
+        old_last_edit_date = dn.last_edit_date
+
+        upload_content = pd.read_excel(excel_file)
+
+        with freezegun.freeze_time(old_last_edit_date + timedelta(seconds=1)):
+            dn._upload(excel_file)
+
+        assert_frame_equal(dn.read()["Sheet1"], upload_content)  # The data of dn should change to the uploaded content
+        assert dn.last_edit_date > old_last_edit_date
+        assert dn.path == _normalize_path(old_xlsx_path)  # The path of the dn should not change
+
+    def test_upload_with_upload_check_pandas(self, excel_file, tmpdir_factory):
+        old_xlsx_path = tmpdir_factory.mktemp("data").join("df.xlsx").strpath
+        old_data = pd.DataFrame([{"a": 0, "b": 1, "c": 2}, {"a": 3, "b": 4, "c": 5}])
+
+        dn = ExcelDataNode("foo", Scope.SCENARIO, properties={"path": old_xlsx_path, "exposed_type": "pandas"})
+        dn.write(old_data)
+        old_last_edit_date = dn.last_edit_date
+
+        def check_data_column(upload_path, upload_data):
+            """Check if the uploaded data has the correct file format and
+            the sheet named "Sheet1" has the correct columns.
+            """
+            return upload_path.endswith(".xlsx") and upload_data["Sheet1"].columns.tolist() == ["a", "b", "c"]
+
+        not_exists_xlsx_path = tmpdir_factory.mktemp("data").join("not_exists.xlsx").strpath
+        reasons = dn._upload(not_exists_xlsx_path, upload_checker=check_data_column)
+        assert bool(reasons) is False
+        assert (
+            str(list(reasons._reasons[dn.id])[0]) == "The uploaded file not_exists.xlsx can not be read,"
+            f' therefore is not a valid data file for data node "{dn.id}"'
+        )
+
+        not_xlsx_path = tmpdir_factory.mktemp("data").join("wrong_format_df.xlsm").strpath
+        old_data.to_excel(not_xlsx_path, index=False)
+        # The upload should fail when the file is not a xlsx
+        reasons = dn._upload(not_xlsx_path, upload_checker=check_data_column)
+        assert bool(reasons) is False
+        assert (
+            str(list(reasons._reasons[dn.id])[0])
+            == f'The uploaded file wrong_format_df.xlsm has invalid data for data node "{dn.id}"'
+        )
+
+        wrong_format_xlsx_path = tmpdir_factory.mktemp("data").join("wrong_format_df.xlsx").strpath
+        pd.DataFrame([{"a": 1, "b": 2, "d": 3}, {"a": 4, "b": 5, "d": 6}]).to_excel(wrong_format_xlsx_path, index=False)
+        # The upload should fail when check_data_column() return False
+        reasons = dn._upload(wrong_format_xlsx_path, upload_checker=check_data_column)
+        assert bool(reasons) is False
+        assert (
+            str(list(reasons._reasons[dn.id])[0])
+            == f'The uploaded file wrong_format_df.xlsx has invalid data for data node "{dn.id}"'
+        )
+
+        assert_frame_equal(dn.read()["Sheet1"], old_data)  # The content of the dn should not change when upload fails
+        assert dn.last_edit_date == old_last_edit_date  # The last edit date should not change when upload fails
+        assert dn.path == _normalize_path(old_xlsx_path)  # The path of the dn should not change
+
+        # The upload should succeed when check_data_column() return True
+        assert dn._upload(excel_file, upload_checker=check_data_column)
+
+    def test_upload_with_upload_check_numpy(self, tmpdir_factory):
+        old_excel_path = tmpdir_factory.mktemp("data").join("df.xlsx").strpath
+        old_data = np.array([[1, 2, 3], [4, 5, 6]])
+
+        new_excel_path = tmpdir_factory.mktemp("data").join("new_upload_data.xlsx").strpath
+        new_data = np.array([[1, 2, 3], [4, 5, 6]])
+        pd.DataFrame(new_data).to_excel(new_excel_path, index=False)
+
+        dn = ExcelDataNode("foo", Scope.SCENARIO, properties={"path": old_excel_path, "exposed_type": "numpy"})
+        dn.write(old_data)
+        old_last_edit_date = dn.last_edit_date
+
+        def check_data_is_positive(upload_path, upload_data):
+            return upload_path.endswith(".xlsx") and np.all(upload_data["Sheet1"] > 0)
+
+        not_exists_xlsx_path = tmpdir_factory.mktemp("data").join("not_exists.xlsx").strpath
+        reasons = dn._upload(not_exists_xlsx_path, upload_checker=check_data_is_positive)
+        assert bool(reasons) is False
+        assert (
+            str(list(reasons._reasons[dn.id])[0]) == "The uploaded file not_exists.xlsx can not be read,"
+            f' therefore is not a valid data file for data node "{dn.id}"'
+        )
+
+        wrong_format_not_excel_path = tmpdir_factory.mktemp("data").join("wrong_format_df.xlsm").strpath
+        pd.DataFrame(old_data).to_excel(wrong_format_not_excel_path, index=False)
+        # The upload should fail when the file is not a excel
+        reasons = dn._upload(wrong_format_not_excel_path, upload_checker=check_data_is_positive)
+        assert bool(reasons) is False
+        assert (
+            str(list(reasons._reasons[dn.id])[0])
+            == f'The uploaded file wrong_format_df.xlsm has invalid data for data node "{dn.id}"'
+        )
+
+        not_xlsx_path = tmpdir_factory.mktemp("data").join("wrong_format_df.xlsx").strpath
+        pd.DataFrame(np.array([[-1, 2, 3], [-4, -5, -6]])).to_excel(not_xlsx_path, index=False)
+        # The upload should fail when check_data_is_positive() return False
+        reasons = dn._upload(not_xlsx_path, upload_checker=check_data_is_positive)
+        assert (
+            str(list(reasons._reasons[dn.id])[0])
+            == f'The uploaded file wrong_format_df.xlsx has invalid data for data node "{dn.id}"'
+        )
+
+        np.array_equal(dn.read()["Sheet1"], old_data)  # The content of the dn should not change when upload fails
+        assert dn.last_edit_date == old_last_edit_date  # The last edit date should not change when upload fails
+        assert dn.path == _normalize_path(old_excel_path)  # The path of the dn should not change
+
+        # The upload should succeed when check_data_is_positive() return True
+        assert dn._upload(new_excel_path, upload_checker=check_data_is_positive)

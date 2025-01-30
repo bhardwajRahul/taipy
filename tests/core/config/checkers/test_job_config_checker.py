@@ -1,4 +1,4 @@
-# Copyright 2023 Avaiga Private Limited
+# Copyright 2021-2025 Avaiga Private Limited
 #
 # Licensed under the Apache License, Version 2.0 (the "License"); you may not use this file except in compliance with
 # the License. You may obtain a copy of the License at
@@ -11,12 +11,37 @@
 
 import pytest
 
-from src.taipy.core.config.job_config import JobConfig
-from taipy.config.checker.issue_collector import IssueCollector
-from taipy.config.config import Config
+from taipy.common.config import Config
+from taipy.common.config.checker.issue_collector import IssueCollector
+from taipy.core.config.job_config import JobConfig
 
 
 class TestJobConfigChecker:
+    def test_check_mode(self, caplog):
+        Config._collector = IssueCollector()
+        Config.check()
+        assert len(Config._collector.errors) == 0
+
+        Config.configure_job_executions(mode=JobConfig._DEVELOPMENT_MODE)
+        Config._collector = IssueCollector()
+        Config.check()
+        assert len(Config._collector.errors) == 0
+
+        Config.configure_job_executions(mode=JobConfig._STANDALONE_MODE, max_nb_of_workers=2)
+        Config._collector = IssueCollector()
+        Config.check()
+        assert len(Config._collector.errors) == 0
+
+        Config.configure_job_executions(mode="foo", max_nb_of_workers=2)
+        with pytest.raises(SystemExit):
+            Config._collector = IssueCollector()
+            Config.check()
+        assert len(Config._collector.errors) == 1
+        expected_error_message = "Job execution mode must be either development, standalone."
+        assert expected_error_message in caplog.text
+
+        Config.configure_job_executions(mode=JobConfig._DEVELOPMENT_MODE)
+
     def test_check_standalone_mode(self, caplog):
         Config._collector = IssueCollector()
         Config.check()

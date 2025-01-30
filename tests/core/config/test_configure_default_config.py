@@ -1,4 +1,4 @@
-# Copyright 2023 Avaiga Private Limited
+# Copyright 2021-2025 Avaiga Private Limited
 #
 # Licensed under the Apache License, Version 2.0 (the "License"); you may not use this file except in compliance with
 # the License. You may obtain a copy of the License at
@@ -12,9 +12,9 @@
 import json
 from datetime import timedelta
 
-from src.taipy.core.common.mongo_default_document import MongoDefaultDocument
-from taipy.config.common.scope import Scope
-from taipy.config.config import Config
+from taipy.common.config import Config
+from taipy.common.config.common.scope import Scope
+from taipy.core.common.mongo_default_document import MongoDefaultDocument
 
 
 def test_set_default_data_node_configuration():
@@ -40,6 +40,12 @@ def test_set_default_data_node_configuration():
     assert data_node4.storage_type == "json"
     assert data_node4.scope == Scope.SCENARIO
     assert data_node4.validity_period == timedelta(1)
+
+    Config.set_default_data_node_configuration("s3_object", validity_period=timedelta(1))
+    data_node5 = Config.configure_data_node(id="input_data5")
+    assert data_node5.storage_type == "s3_object"
+    assert data_node5.scope == Scope.SCENARIO
+    assert data_node5.validity_period == timedelta(1)
 
 
 def test_set_default_data_node_configuration_replace_old_default_config():
@@ -132,11 +138,9 @@ def test_set_default_csv_data_node_configuration():
 
 
 def test_set_default_json_data_node_configuration():
-    class MyCustomEncoder(json.JSONEncoder):
-        ...
+    class MyCustomEncoder(json.JSONEncoder): ...
 
-    class MyCustomDecoder(json.JSONDecoder):
-        ...
+    class MyCustomDecoder(json.JSONDecoder): ...
 
     Config.set_default_data_node_configuration(
         storage_type="json",
@@ -420,8 +424,7 @@ def test_set_default_sql_table_data_node_configuration():
 
 
 def test_set_default_sql_data_node_configuration():
-    def query_builder():
-        ...
+    def query_builder(): ...
 
     Config.set_default_data_node_configuration(
         storage_type="sql",
@@ -578,5 +581,75 @@ def test_set_default_mongo_collection_data_node_configuration():
     assert dn3.db_host == "default_host"
     assert dn3.db_driver == "default server"
     assert dn3.db_extra_args == {"default": "default"}
+    assert dn3.scope == Scope.GLOBAL
+    assert dn3.validity_period == timedelta(1)
+
+
+def test_set_default_s3_object_data_node_configuration():
+    Config.set_default_data_node_configuration(
+        storage_type="s3_object",
+        aws_access_key="default_access_key",
+        aws_secret_access_key="default_secret_acces_key",
+        aws_s3_bucket_name="default_bucket_name",
+        aws_s3_object_key="default_object_key",
+        aws_region="",
+        aws_s3_object_parameters={"default": "default"},
+        scope=Scope.GLOBAL,
+        validity_period=timedelta(2),
+    )
+
+    # Config with generic config_data_node without storage_type
+    # should return the default DataNode
+    dn1 = Config.configure_data_node(id="dn1")
+    assert dn1.storage_type == "s3_object"
+    assert dn1.aws_access_key == "default_access_key"
+    assert dn1.aws_secret_access_key == "default_secret_acces_key"
+    assert dn1.aws_s3_bucket_name == "default_bucket_name"
+    assert dn1.aws_s3_object_key == "default_object_key"
+    assert dn1.aws_region == ""
+    assert dn1.aws_s3_object_parameters == {"default": "default"}
+    assert dn1.scope == Scope.GLOBAL
+    assert dn1.validity_period == timedelta(2)
+
+    # Config with generic config_data_node without storage_type
+    # with custom properties
+    dn2 = Config.configure_data_node(
+        id="dn2",
+        aws_access_key="custom_access_key_2",
+        aws_secret_access_key="custom_secret_acces_key_2",
+        aws_s3_bucket_name="custom_bucket_name_2",
+        aws_s3_object_key="custom_object_key_2",
+    )
+    assert dn2.storage_type == "s3_object"
+    assert dn2.aws_access_key == "custom_access_key_2"
+    assert dn2.aws_secret_access_key == "custom_secret_acces_key_2"
+    assert dn2.aws_s3_bucket_name == "custom_bucket_name_2"
+    assert dn2.aws_s3_object_key == "custom_object_key_2"
+    assert dn2.aws_region == ""
+    assert dn2.aws_s3_object_parameters == {"default": "default"}
+    assert dn2.scope == Scope.GLOBAL
+    assert dn2.validity_period == timedelta(2)
+
+    # Config a datanode with specific "storage_type" = "s3_object"
+    # should use properties from the default datanode
+    dn3 = Config.configure_data_node(
+        id="dn3",
+        storage_type="s3_object",
+        aws_access_key="custom_access_key_3",
+        aws_secret_access_key="custom_secret_acces_key_3",
+        aws_s3_bucket_name="custom_bucket_name_3",
+        aws_s3_object_key="custom_object_key_3",
+        aws_region="",
+        aws_s3_object_parameters={"default": "default"},
+        scope=Scope.GLOBAL,
+        validity_period=timedelta(1),
+    )
+    assert dn3.storage_type == "s3_object"
+    assert dn3.aws_access_key == "custom_access_key_3"
+    assert dn3.aws_secret_access_key == "custom_secret_acces_key_3"
+    assert dn3.aws_s3_bucket_name == "custom_bucket_name_3"
+    assert dn3.aws_s3_object_key == "custom_object_key_3"
+    assert dn3.aws_region == ""
+    assert dn3.aws_s3_object_parameters == {"default": "default"}
     assert dn3.scope == Scope.GLOBAL
     assert dn3.validity_period == timedelta(1)

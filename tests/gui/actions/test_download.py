@@ -1,4 +1,4 @@
-# Copyright 2023 Avaiga Private Limited
+# Copyright 2021-2025 Avaiga Private Limited
 #
 # Licensed under the Apache License, Version 2.0 (the "License"); you may not use this file except in compliance with
 # the License. You may obtain a copy of the License at
@@ -10,8 +10,9 @@
 # specific language governing permissions and limitations under the License.
 
 import inspect
+import typing as t
 
-from flask import g
+from flask import Flask, g
 
 from taipy.gui import Gui, Markdown, State, download
 
@@ -30,13 +31,13 @@ def test_download(gui: Gui, helpers):
     gui.run(run_server=False)
     flask_client = gui._server.test_client()
     # WS client and emit
-    ws_client = gui._server._ws.test_client(gui._server.get_flask())
+    ws_client = gui._server._ws.test_client(t.cast(Flask, gui._server.get_flask()))
     cid = helpers.create_scope_and_get_sid(gui)
     # Get the jsx once so that the page will be evaluated -> variable will be registered
     flask_client.get(f"/taipy-jsx/test?client_id={cid}")
     with gui.get_flask_app().test_request_context(f"/taipy-jsx/test/?client_id={cid}", data={"client_id": cid}):
         g.client_id = cid
-        download(gui._Gui__state, "some text", "filename.txt", "on_download_action")
+        download(gui._Gui__state, "some text", "filename.txt", "on_download_action")  # type: ignore[attr-defined]
 
     received_messages = ws_client.get_received()
     helpers.assert_outward_ws_simple_message(

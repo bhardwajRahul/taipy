@@ -1,6 +1,6 @@
 export type DisplayModel = [
     string,
-    Record<string, Record<string, { name: string; type: string }>>,
+    Record<string, Record<string, { name: string; type: string, status?: TaskStatus }>>,
     Array<[string, string, string, string]>
 ];
 
@@ -18,4 +18,16 @@ export enum NodeType {
     SCENARIO = 1,
     SEQUENCE = 2,
     NODE = 3,
+}
+
+export enum TaskStatus {
+    Quiet = 0,
+    Pending = 3,
+    Running = 4,
+}
+
+export type TaskStatuses = Record<string, TaskStatus>;
+
+export interface OnClick {
+    (id: string): void;
 }

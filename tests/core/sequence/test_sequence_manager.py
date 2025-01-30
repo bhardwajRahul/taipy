@@ -1,4 +1,4 @@
-# Copyright 2023 Avaiga Private Limited
+# Copyright 2021-2025 Avaiga Private Limited
 #
 # Licensed under the Apache License, Version 2.0 (the "License"); you may not use this file except in compliance with
 # the License. You may obtain a copy of the License at
@@ -9,41 +9,37 @@
 # an "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied. See the License for the
 # specific language governing permissions and limitations under the License.
 
-import json
-from pathlib import Path
 from typing import Callable, Iterable, Optional
 from unittest import mock
 from unittest.mock import ANY
 
 import pytest
 
-from src.taipy.core._orchestrator._orchestrator import _Orchestrator
-from src.taipy.core._orchestrator._orchestrator_factory import _OrchestratorFactory
-from src.taipy.core._version._version_manager import _VersionManager
-from src.taipy.core.common import _utils
-from src.taipy.core.common._utils import _Subscriber
-from src.taipy.core.config.job_config import JobConfig
-from src.taipy.core.data._data_manager import _DataManager
-from src.taipy.core.data.in_memory import InMemoryDataNode
-from src.taipy.core.exceptions.exceptions import (
+from taipy.common.config import Config
+from taipy.common.config.common.scope import Scope
+from taipy.core._orchestrator._orchestrator import _Orchestrator
+from taipy.core._version._version_manager import _VersionManager
+from taipy.core.common import _utils
+from taipy.core.common._utils import _Subscriber
+from taipy.core.data._data_manager import _DataManager
+from taipy.core.data.in_memory import InMemoryDataNode
+from taipy.core.exceptions.exceptions import (
     InvalidSequenceId,
     ModelNotFound,
     NonExistingSequence,
-    NonExistingTask,
+    SequenceAlreadyExists,
     SequenceBelongsToNonExistingScenario,
 )
-from src.taipy.core.job._job_manager import _JobManager
-from src.taipy.core.scenario._scenario_manager import _ScenarioManager
-from src.taipy.core.scenario.scenario import Scenario
-from src.taipy.core.sequence._sequence_manager import _SequenceManager
-from src.taipy.core.sequence._sequence_manager_factory import _SequenceManagerFactory
-from src.taipy.core.sequence.sequence import Sequence
-from src.taipy.core.sequence.sequence_id import SequenceId
-from src.taipy.core.task._task_manager import _TaskManager
-from src.taipy.core.task.task import Task
-from src.taipy.core.task.task_id import TaskId
-from taipy.config.common.scope import Scope
-from taipy.config.config import Config
+from taipy.core.job._job_manager import _JobManager
+from taipy.core.scenario._scenario_manager import _ScenarioManager
+from taipy.core.scenario.scenario import Scenario
+from taipy.core.sequence._sequence_manager import _SequenceManager
+from taipy.core.sequence._sequence_manager_factory import _SequenceManagerFactory
+from taipy.core.sequence.sequence import Sequence
+from taipy.core.sequence.sequence_id import SequenceId
+from taipy.core.task._task_manager import _TaskManager
+from taipy.core.task.task import Task
+from taipy.core.task.task_id import TaskId
 from tests.core.utils.NotifyMock import NotifyMock
 
 
@@ -73,18 +69,17 @@ def test_raise_sequence_does_not_belong_to_scenario():
 
 
 def __init():
-    Config.configure_job_executions(mode=JobConfig._DEVELOPMENT_MODE)
-    _OrchestratorFactory._build_dispatcher()
     input_dn = InMemoryDataNode("foo", Scope.SCENARIO)
     output_dn = InMemoryDataNode("foo", Scope.SCENARIO)
-    task = Task("task", {}, print, [input_dn], [output_dn], TaskId("task_id"))
-    scenario = Scenario("scenario", set([task]), {}, set())
+    task = Task("task", {}, print, [input_dn], [output_dn], TaskId("Task_task_id"))
+    _TaskManager._set(task)
+    scenario = Scenario("scenario", {task}, {}, set())
     _ScenarioManager._set(scenario)
     return scenario, task
 
 
 def test_set_and_get_sequence_no_existing_sequence():
-    scenario, task = __init()
+    scenario, _ = __init()
     sequence_name_1 = "p1"
     sequence_id_1 = SequenceId(f"SEQUENCE_{sequence_name_1}_{scenario.id}")
     sequence_name_2 = "p2"
@@ -124,8 +119,9 @@ def test_set_and_get():
     assert len(_SequenceManager._get(sequence_2).tasks) == 1
     assert _TaskManager._get(task.id).id == task.id
 
-    # We save the first sequence again. We expect nothing to change
-    scenario.add_sequence(sequence_name_1, [])
+    # We save the first sequence again. We expect an exception and nothing to change
+    with pytest.raises(SequenceAlreadyExists):
+        scenario.add_sequence(sequence_name_1, [])
     sequence_1 = scenario.sequences[sequence_name_1]
     assert _SequenceManager._get(sequence_id_1).id == sequence_1.id
     assert len(_SequenceManager._get(sequence_id_1).tasks) == 0
@@ -137,20 +133,18 @@ def test_set_and_get():
     assert len(_SequenceManager._get(sequence_2).tasks) == 1
     assert _TaskManager._get(task.id).id == task.id
 
-    # We save a third sequence with same name as the first one.
-    # We expect the first sequence to be updated
-    scenario.add_sequences({sequence_name_1: [task]})
-    sequence_3 = scenario.sequences[sequence_name_1]
-    assert _SequenceManager._get(sequence_id_1).id == sequence_1.id
-    assert _SequenceManager._get(sequence_id_1).id == sequence_3.id
-    assert len(_SequenceManager._get(sequence_id_1).tasks) == 1
-    assert _SequenceManager._get(sequence_1).id == sequence_1.id
-    assert len(_SequenceManager._get(sequence_1).tasks) == 1
-    assert _SequenceManager._get(sequence_id_2).id == sequence_2.id
-    assert len(_SequenceManager._get(sequence_id_2).tasks) == 1
-    assert _SequenceManager._get(sequence_2).id == sequence_2.id
-    assert len(_SequenceManager._get(sequence_2).tasks) == 1
-    assert _TaskManager._get(task.id).id == task.id
+
+def test_task_parent_id_set_only_when_create():
+    scenario, task = __init()
+    sequence_name_1 = "p1"
+
+    with mock.patch("taipy.core.task._task_manager._TaskManager._set") as mck:
+        scenario.add_sequences({sequence_name_1: [task]})
+        mck.assert_called_once()
+
+    with mock.patch("taipy.core.task._task_manager._TaskManager._set") as mck:
+        scenario.sequences[sequence_name_1]
+        mck.assert_not_called()
 
 
 def test_get_all_on_multiple_versions_environment():
@@ -209,10 +203,14 @@ def test_get_all_on_multiple_versions_environment():
 def test_is_submittable():
     dn = InMemoryDataNode("dn", Scope.SCENARIO, properties={"default_data": 10})
     task = Task("task", {}, print, [dn])
-    scenario = Scenario("scenario", set([task]), {}, set())
+    scenario = Scenario("scenario", {task}, {}, set())
     _ScenarioManager._set(scenario)
 
-    scenario.add_sequences({"sequence": list([task])})
+    rc = _SequenceManager._is_submittable("some_sequence")
+    assert not rc
+    assert "Entity some_sequence does not exist in the repository." in rc.reasons
+
+    scenario.add_sequences({"sequence": [task]})
     sequence = scenario.sequences["sequence"]
 
     assert len(_SequenceManager._get_all()) == 1
@@ -231,9 +229,6 @@ def test_is_submittable():
 
 
 def test_submit():
-    Config.configure_job_executions(mode=JobConfig._DEVELOPMENT_MODE)
-    _OrchestratorFactory._build_dispatcher()
-
     data_node_1 = InMemoryDataNode("foo", Scope.SCENARIO, "s1")
     data_node_2 = InMemoryDataNode("bar", Scope.SCENARIO, "s2")
     data_node_3 = InMemoryDataNode("baz", Scope.SCENARIO, "s3")
@@ -272,8 +267,8 @@ def test_submit():
             cls.submit_calls.append(task)
             return super()._lock_dn_output_and_create_job(task, submit_id, submit_entity_id, callbacks, force)
 
-    with mock.patch("src.taipy.core.task._task_manager._TaskManager._orchestrator", new=MockOrchestrator):
-        # sequence does not exists. We expect an exception to be raised
+    with mock.patch("taipy.core.task._task_manager._TaskManager._orchestrator", new=MockOrchestrator):
+        # sequence does not exist. We expect an exception to be raised
         with pytest.raises(NonExistingSequence):
             _SequenceManager._submit(sequence_id)
 
@@ -342,9 +337,6 @@ def mock_function_no_input_one_output():
 
 
 def test_submit_sequence_from_tasks_with_one_or_no_input_output():
-    Config.configure_job_executions(mode=JobConfig._DEVELOPMENT_MODE)
-    _OrchestratorFactory._build_dispatcher()
-
     # test no input and no output Task
     task_no_input_no_output = Task("task_no_input_no_output", {}, mock_function_no_input_no_output)
     scenario_1 = Scenario("scenario_1", {task_no_input_no_output}, {})
@@ -411,8 +403,6 @@ def mult_by_3(nb: int):
 
 def test_get_or_create_data():
     # only create intermediate data node once
-    Config.configure_job_executions(mode=JobConfig._DEVELOPMENT_MODE)
-
     dn_config_1 = Config.configure_data_node("foo", "in_memory", Scope.SCENARIO, default_data=1)
     dn_config_2 = Config.configure_data_node("bar", "in_memory", Scope.SCENARIO, default_data=0)
     dn_config_6 = Config.configure_data_node("baz", "in_memory", Scope.SCENARIO, default_data=0)
@@ -422,8 +412,6 @@ def test_get_or_create_data():
     # dn_1 ---> mult_by_two ---> dn_2 ---> mult_by_3 ---> dn_6
     scenario_config = Config.configure_scenario("scenario", [task_config_mult_by_two, task_config_mult_by_3])
 
-    _OrchestratorFactory._build_dispatcher()
-
     assert len(_DataManager._get_all()) == 0
     assert len(_TaskManager._get_all()) == 0
 
@@ -431,7 +419,7 @@ def test_get_or_create_data():
     scenario.add_sequences({"by_6": list(scenario.tasks.values())})
     sequence = scenario.sequences["by_6"]
 
-    assert sequence.name == "by_6"
+    assert sequence.properties["name"] == "by_6"
 
     assert len(_DataManager._get_all()) == 3
     assert len(_TaskManager._get_all()) == 2
@@ -461,22 +449,17 @@ def test_get_or_create_data():
         sequence.WRONG.write(7)
 
 
-def notify1(*args, **kwargs):
-    ...
+def notify1(*args, **kwargs): ...
 
 
-def notify2(*args, **kwargs):
-    ...
+def notify2(*args, **kwargs): ...
 
 
-def notify_multi_param(*args, **kwargs):
-    ...
+def notify_multi_param(*args, **kwargs): ...
 
 
 def test_sequence_notification_subscribe(mocker):
-    Config.configure_job_executions(mode=JobConfig._DEVELOPMENT_MODE)
-
-    mocker.patch("src.taipy.core._entity._reload._Reloader._reload", side_effect=lambda m, o: o)
+    mocker.patch("taipy.core._entity._reload._Reloader._reload", side_effect=lambda m, o: o)
 
     task_configs = [
         Config.configure_task(
@@ -486,8 +469,6 @@ def test_sequence_notification_subscribe(mocker):
             Config.configure_data_node("bar", "in_memory", Scope.SCENARIO, default_data=0),
         )
     ]
-
-    _OrchestratorFactory._build_dispatcher()
 
     tasks = _TaskManager._bulk_get_or_create(task_configs=task_configs)
     scenario = Scenario("scenario", set(tasks), {}, sequences={"by_1": {"tasks": tasks}})
@@ -503,7 +484,11 @@ def test_sequence_notification_subscribe(mocker):
     notify_2.__module__ = "notify_2"
     # Mocking this because NotifyMock is a class that does not loads correctly when getting the sequence
     # from the storage.
-    mocker.patch.object(_utils, "_load_fct", side_effect=[notify_1, notify_1, notify_2, notify_2, notify_2, notify_2])
+    mocker.patch.object(
+        _utils,
+        "_load_fct",
+        side_effect=[notify_1, notify_1, notify_2, notify_2, notify_2, notify_2],
+    )
 
     # test subscription
     callback = mock.MagicMock()
@@ -528,9 +513,7 @@ def test_sequence_notification_subscribe(mocker):
 
 
 def test_sequence_notification_subscribe_multi_param(mocker):
-    Config.configure_job_executions(mode=JobConfig._DEVELOPMENT_MODE)
-
-    mocker.patch("src.taipy.core._entity._reload._Reloader._reload", side_effect=lambda m, o: o)
+    mocker.patch("taipy.core._entity._reload._Reloader._reload", side_effect=lambda m, o: o)
 
     task_configs = [
         Config.configure_task(
@@ -540,8 +523,6 @@ def test_sequence_notification_subscribe_multi_param(mocker):
             Config.configure_data_node("bar", "in_memory", Scope.SCENARIO, default_data=0),
         )
     ]
-
-    _OrchestratorFactory._build_dispatcher()
 
     tasks = _TaskManager._bulk_get_or_create(task_configs)
     scenario = Scenario("scenario", set(tasks), {}, sequences={"by_6": {"tasks": tasks}})
@@ -563,9 +544,7 @@ def test_sequence_notification_subscribe_multi_param(mocker):
 
 
 def test_sequence_notification_unsubscribe(mocker):
-    Config.configure_job_executions(mode=JobConfig._DEVELOPMENT_MODE)
-
-    mocker.patch("src.taipy.core._entity._reload._Reloader._reload", side_effect=lambda m, o: o)
+    mocker.patch("taipy.core._entity._reload._Reloader._reload", side_effect=lambda m, o: o)
 
     task_configs = [
         Config.configure_task(
@@ -575,8 +554,6 @@ def test_sequence_notification_unsubscribe(mocker):
             Config.configure_data_node("bar", "in_memory", Scope.SCENARIO, default_data=0),
         )
     ]
-
-    _OrchestratorFactory._build_dispatcher()
 
     tasks = _TaskManager._bulk_get_or_create(task_configs)
     scenario = Scenario("scenario", set(tasks), {}, sequences={"by_6": {"tasks": tasks}})
@@ -598,8 +575,6 @@ def test_sequence_notification_unsubscribe(mocker):
 
 
 def test_sequence_notification_unsubscribe_multi_param():
-    Config.configure_job_executions(mode=JobConfig._DEVELOPMENT_MODE)
-
     task_configs = [
         Config.configure_task(
             "mult_by_two",
@@ -608,8 +583,6 @@ def test_sequence_notification_unsubscribe_multi_param():
             Config.configure_data_node("bar", "in_memory", Scope.SCENARIO, default_data=0),
         )
     ]
-
-    _OrchestratorFactory._build_dispatcher()
 
     tasks = _TaskManager._bulk_get_or_create(task_configs)
     scenario = Scenario("scenario", tasks, {}, sequences={"by_6": {"tasks": tasks}})
@@ -636,8 +609,6 @@ def test_sequence_notification_unsubscribe_multi_param():
 
 
 def test_sequence_notification_subscribe_all():
-    Config.configure_job_executions(mode=JobConfig._DEVELOPMENT_MODE)
-
     task_configs = [
         Config.configure_task(
             "mult_by_two",
@@ -646,8 +617,6 @@ def test_sequence_notification_subscribe_all():
             Config.configure_data_node("bar", "in_memory", Scope.SCENARIO, default_data=0),
         )
     ]
-
-    _OrchestratorFactory._build_dispatcher()
 
     tasks = _TaskManager._bulk_get_or_create(task_configs)
     scenario = Scenario("scenario", tasks, {}, sequences={"by_6": {"tasks": tasks}, "other_sequence": {"tasks": tasks}})
@@ -669,31 +638,33 @@ def test_delete():
     with pytest.raises(ModelNotFound):
         _SequenceManager._delete(sequence_id)
 
-    scenario_1 = Scenario("scenario_1", [], {}, scenario_id="SCENARIO_scenario_id_1")
-    scenario_2 = Scenario("scenario_2", [], {}, scenario_id="SCENARIO_scenario_id_2")
+    scenario_1 = Scenario("scenario_1", set(), {}, scenario_id="SCENARIO_scenario_id_1")
+    scenario_2 = Scenario("scenario_2", set(), {}, scenario_id="SCENARIO_scenario_id_2")
     _ScenarioManager._set(scenario_1)
     _ScenarioManager._set(scenario_2)
     with pytest.raises(ModelNotFound):
-        _SequenceManager._delete(sequence_id)
+        _SequenceManager._delete(SequenceId(sequence_id))
 
-    scenario_1.add_sequences({"sequence": {}})
+    scenario_1.add_sequences({"sequence": []})
     assert len(_SequenceManager._get_all()) == 1
-    _SequenceManager._delete(sequence_id)
+    _SequenceManager._delete(SequenceId(sequence_id))
     assert len(_SequenceManager._get_all()) == 0
 
-    scenario_1.add_sequences({"sequence": {}, "sequence_1": {}})
+    scenario_1.add_sequences({"sequence": [], "sequence_1": []})
     assert len(_SequenceManager._get_all()) == 2
-    _SequenceManager._delete(sequence_id)
+    _SequenceManager._delete(SequenceId(sequence_id))
     assert len(_SequenceManager._get_all()) == 1
 
-    scenario_1.add_sequences({"sequence_1": {}, "sequence_2": {}, "sequence_3": {}})
-    scenario_2.add_sequences({"sequence_1_2": {}, "sequence_2_2": {}})
+    with pytest.raises(SequenceAlreadyExists):
+        scenario_1.add_sequences({"sequence_1": [], "sequence_2": [], "sequence_3": []})
+    scenario_1.add_sequences({"sequence_2": [], "sequence_3": []})
+    scenario_2.add_sequences({"sequence_1_2": [], "sequence_2_2": []})
     assert len(_SequenceManager._get_all()) == 5
     _SequenceManager._delete_all()
     assert len(_SequenceManager._get_all()) == 0
 
-    scenario_1.add_sequences({"sequence_1": {}, "sequence_2": {}, "sequence_3": {}, "sequence_4": {}})
-    scenario_2.add_sequences({"sequence_1_2": {}, "sequence_2_2": {}})
+    scenario_1.add_sequences({"sequence_1": [], "sequence_2": [], "sequence_3": [], "sequence_4": []})
+    scenario_2.add_sequences({"sequence_1_2": [], "sequence_2_2": []})
     assert len(_SequenceManager._get_all()) == 6
     _SequenceManager._delete_many(
         [
@@ -765,62 +736,10 @@ def test_exists():
     assert _SequenceManager._exists(scenario.sequences["sequence"])
 
 
-def test_export(tmpdir_factory):
-    path = tmpdir_factory.mktemp("data")
-    task = Task("task", {}, print, id=TaskId("task_id"))
-    scenario = Scenario(
-        "scenario",
-        set([task]),
-        {},
-        set(),
-        version="1.0",
-        sequences={"sequence_1": {}, "sequence_2": {"tasks": [task], "properties": {"xyz": "acb"}}},
-    )
-    _TaskManager._set(task)
-    _ScenarioManager._set(scenario)
-
-    sequence_1 = scenario.sequences["sequence_1"]
-    sequence_2 = scenario.sequences["sequence_2"]
-
-    _SequenceManager._export(sequence_1.id, Path(path))
-    export_sequence_json_file_path = f"{path}/sequences/{sequence_1.id}.json"
-    with open(export_sequence_json_file_path, "rb") as f:
-        sequence_json_file = json.load(f)
-        expected_json = {
-            "id": sequence_1.id,
-            "owner_id": scenario.id,
-            "parent_ids": [scenario.id],
-            "name": "sequence_1",
-            "tasks": [],
-            "properties": {},
-            "subscribers": [],
-        }
-        assert expected_json == sequence_json_file
-
-    _SequenceManager._export(sequence_2.id, Path(path))
-    export_sequence_json_file_path = f"{path}/sequences/{sequence_2.id}.json"
-    with open(export_sequence_json_file_path, "rb") as f:
-        sequence_json_file = json.load(f)
-        expected_json = {
-            "id": sequence_2.id,
-            "owner_id": scenario.id,
-            "parent_ids": [scenario.id],
-            "name": "sequence_2",
-            "tasks": [task.id],
-            "properties": {"xyz": "acb"},
-            "subscribers": [],
-        }
-        assert expected_json == sequence_json_file
-
-
 def test_hard_delete_one_single_sequence_with_scenario_data_nodes():
-    Config.configure_job_executions(mode=JobConfig._DEVELOPMENT_MODE)
-
     dn_input_config = Config.configure_data_node("my_input", "in_memory", scope=Scope.SCENARIO, default_data="testing")
     dn_output_config = Config.configure_data_node("my_output", "in_memory", scope=Scope.SCENARIO)
     task_config = Config.configure_task("task_config", print, dn_input_config, dn_output_config)
-
-    _OrchestratorFactory._build_dispatcher()
 
     tasks = _TaskManager._bulk_get_or_create([task_config])
     scenario = Scenario("scenario", tasks, {}, sequences={"sequence": {"tasks": tasks}})
@@ -843,13 +762,9 @@ def test_hard_delete_one_single_sequence_with_scenario_data_nodes():
 
 
 def test_hard_delete_one_single_sequence_with_cycle_data_nodes():
-    Config.configure_job_executions(mode=JobConfig._DEVELOPMENT_MODE)
-
     dn_input_config = Config.configure_data_node("my_input", "in_memory", scope=Scope.CYCLE, default_data="testing")
     dn_output_config = Config.configure_data_node("my_output", "in_memory", scope=Scope.CYCLE)
     task_config = Config.configure_task("task_config", print, dn_input_config, dn_output_config)
-
-    _OrchestratorFactory._build_dispatcher()
 
     tasks = _TaskManager._bulk_get_or_create([task_config])
     scenario = Scenario("scenario", tasks, {}, sequences={"sequence": {"tasks": tasks}})
@@ -872,15 +787,11 @@ def test_hard_delete_one_single_sequence_with_cycle_data_nodes():
 
 
 def test_hard_delete_shared_entities():
-    Config.configure_job_executions(mode=JobConfig._DEVELOPMENT_MODE)
-
     input_dn = Config.configure_data_node("my_input", "in_memory", scope=Scope.SCENARIO, default_data="testing")
     intermediate_dn = Config.configure_data_node("my_inter", "in_memory", scope=Scope.GLOBAL, default_data="testing")
     output_dn = Config.configure_data_node("my_output", "in_memory", scope=Scope.GLOBAL, default_data="testing")
     task_1 = Config.configure_task("task_1", print, input_dn, intermediate_dn)
     task_2 = Config.configure_task("task_2", print, intermediate_dn, output_dn)
-
-    _OrchestratorFactory._build_dispatcher()
 
     tasks_scenario_1 = _TaskManager._bulk_get_or_create([task_1, task_2], scenario_id="scenario_id_1")
     tasks_scenario_2 = _TaskManager._bulk_get_or_create([task_1, task_2], scenario_id="scenario_id_2")
@@ -909,7 +820,7 @@ def test_hard_delete_shared_entities():
 
 
 def my_print(a, b):
-    print(a + b)
+    print(a + b)  # noqa: T201
 
 
 def test_submit_task_with_input_dn_wrong_file_path(caplog):
@@ -940,8 +851,8 @@ def test_submit_task_with_input_dn_wrong_file_path(caplog):
         for input_dn in sequence.data_nodes.values()
         if input_dn not in sequence.get_inputs()
     ]
-    assert all([expected_output in stdout for expected_output in expected_outputs])
-    assert all([expected_output not in stdout for expected_output in not_expected_outputs])
+    assert all(expected_output in stdout for expected_output in expected_outputs)
+    assert all(expected_output not in stdout for expected_output in not_expected_outputs)
 
 
 def test_submit_task_with_one_input_dn_wrong_file_path(caplog):
@@ -973,5 +884,5 @@ def test_submit_task_with_one_input_dn_wrong_file_path(caplog):
         for input_dn in sequence.data_nodes.values()
         if input_dn.config_id != "wrong_csv_file_path"
     ]
-    assert all([expected_output in stdout for expected_output in expected_outputs])
-    assert all([expected_output not in stdout for expected_output in not_expected_outputs])
+    assert all(expected_output in stdout for expected_output in expected_outputs)
+    assert all(expected_output not in stdout for expected_output in not_expected_outputs)

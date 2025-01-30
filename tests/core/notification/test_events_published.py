@@ -1,4 +1,4 @@
-# Copyright 2023 Avaiga Private Limited
+# Copyright 2021-2025 Avaiga Private Limited
 #
 # Licensed under the Apache License, Version 2.0 (the "License"); you may not use this file except in compliance with
 # the License. You may obtain a copy of the License at
@@ -9,20 +9,19 @@
 # an "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied. See the License for the
 # specific language governing permissions and limitations under the License.
 
-from dataclasses import dataclass, field
-from math import exp
 from queue import SimpleQueue
+from typing import Any, Dict, List
 
-from colorama import init
+import pytest
 
-from src.taipy.core import taipy as tp
-from src.taipy.core.config import scenario_config
-from src.taipy.core.job.status import Status
-from src.taipy.core.notification.core_event_consumer import CoreEventConsumerBase
-from src.taipy.core.notification.event import Event, EventEntityType, EventOperation
-from src.taipy.core.notification.notifier import Notifier
-from taipy.config import Config, Frequency
-from tests.core.utils import assert_true_after_time
+from taipy import Orchestrator
+from taipy.common.config import Config, Frequency
+from taipy.core import taipy as tp
+from taipy.core.job.status import Status
+from taipy.core.notification.core_event_consumer import CoreEventConsumerBase
+from taipy.core.notification.event import Event, EventEntityType, EventOperation
+from taipy.core.notification.notifier import Notifier
+from taipy.core.scenario._scenario_manager_factory import _ScenarioManagerFactory
 
 
 class Snapshot:
@@ -30,11 +29,12 @@ class Snapshot:
     A captured snapshot of the recording core events consumer.
     """
 
-    def __init__(self):
-        self.collected_events = []
-        self.entity_type_collected = {}
-        self.operation_collected = {}
-        self.attr_name_collected = {}
+    def __init__(self) -> None:
+        self.collected_events: List[Event] = []
+        self.entity_type_collected: Dict[EventEntityType, int] = {}
+        self.operation_collected: Dict[EventEntityType, int] = {}
+        self.attr_name_collected: Dict[EventEntityType, int] = {}
+        self.attr_value_collected: Dict[EventEntityType, List[Any]] = {}
 
     def capture_event(self, event):
         self.collected_events.append(event)
@@ -42,6 +42,10 @@ class Snapshot:
         self.operation_collected[event.operation] = self.operation_collected.get(event.operation, 0) + 1
         if event.attribute_name:
             self.attr_name_collected[event.attribute_name] = self.attr_name_collected.get(event.attribute_name, 0) + 1
+            if self.attr_value_collected.get(event.attribute_name, None):
+                self.attr_value_collected[event.attribute_name].append(event.attribute_value)
+            else:
+                self.attr_value_collected[event.attribute_name] = [event.attribute_value]
 
 
 class RecordingConsumer(CoreEventConsumerBase):
@@ -65,7 +69,7 @@ class RecordingConsumer(CoreEventConsumerBase):
         return snapshot
 
     def process_event(self, event: Event):
-        # Nothing todo
+        # Nothing to do
         pass
 
     def start(self):
@@ -91,8 +95,9 @@ def test_events_published_for_scenario_creation():
     register_id_0, register_queue_0 = Notifier.register()
     all_evts = RecordingConsumer(register_id_0, register_queue_0)
     all_evts.start()
-    # Create a scenario only trigger 6 creation events (for cycle, data node(x2), task, sequence and scenario)
-    tp.create_scenario(sc_config)
+    # Create a scenario via the manager
+    # should only trigger 6 creation events (for cycle, data node(x2), task, sequence and scenario)
+    _ScenarioManagerFactory._build_manager()._create(sc_config)
     snapshot = all_evts.capture()
 
     assert len(snapshot.collected_events) == 6
@@ -143,22 +148,19 @@ def test_events_published_for_writing_dn():
     all_evts = RecordingConsumer(register_id_0, register_queue_0)
     all_evts.start()
 
-    # Write input manually trigger 4 data node update events
-    # for last_edit_date, editor_id, editor_expiration_date and edit_in_progress
+    # Write input manually trigger 5 data node update events
+    # for last_edit_date, editor_id, editor_expiration_date, edit_in_progress and edits
     scenario.the_input.write("test")
     snapshot = all_evts.capture()
-    assert len(snapshot.collected_events) == 4
-    assert snapshot.entity_type_collected.get(EventEntityType.CYCLE, 0) == 0
-    assert snapshot.entity_type_collected.get(EventEntityType.DATA_NODE, 0) == 4
-    assert snapshot.entity_type_collected.get(EventEntityType.TASK, 0) == 0
-    assert snapshot.entity_type_collected.get(EventEntityType.SEQUENCE, 0) == 0
-    assert snapshot.entity_type_collected.get(EventEntityType.SCENARIO, 0) == 0
-    assert snapshot.operation_collected.get(EventOperation.CREATION, 0) == 0
-    assert snapshot.operation_collected.get(EventOperation.UPDATE, 0) == 4
+    assert len(snapshot.collected_events) == 5
+    assert snapshot.entity_type_collected.get(EventEntityType.DATA_NODE, 0) == 5
+    assert snapshot.operation_collected.get(EventOperation.UPDATE, 0) == 5
     all_evts.stop()
 
-
-def test_events_published_for_scenario_submission():
+@pytest.mark.parametrize("standalone", [False, True])
+def test_events_published_for_scenario_submission(standalone):
+    if standalone:
+        Config.configure_job_executions(mode="standalone", max_nb_of_workers=2)
     input_config = Config.configure_data_node("the_input")
     output_config = Config.configure_data_node("the_output")
     task_config = Config.configure_task("the_task", identity, input=input_config, output=output_config)
@@ -178,24 +180,30 @@ def test_events_published_for_scenario_submission():
     # 1 submission creation event
     # 1 submission update event for jobs
     # 3 submission update events (for status: PENDING, RUNNING and COMPLETED)
-    scenario.submit()
+    # 1 submission update event for is_completed
+    if standalone:
+        Orchestrator().run()
+        scenario.submit(wait=True)
+    else:
+        scenario.submit()
     snapshot = all_evts.capture()
-    assert len(snapshot.collected_events) == 17
+    assert len(snapshot.collected_events) == 18
     assert snapshot.entity_type_collected.get(EventEntityType.CYCLE, 0) == 0
-    assert snapshot.entity_type_collected.get(EventEntityType.DATA_NODE, 0) == 7
+    assert snapshot.entity_type_collected.get(EventEntityType.DATA_NODE, 0) == 8
     assert snapshot.entity_type_collected.get(EventEntityType.TASK, 0) == 0
     assert snapshot.entity_type_collected.get(EventEntityType.SEQUENCE, 0) == 0
     assert snapshot.entity_type_collected.get(EventEntityType.SCENARIO, 0) == 1
     assert snapshot.entity_type_collected.get(EventEntityType.JOB, 0) == 4
     assert snapshot.entity_type_collected.get(EventEntityType.SUBMISSION, 0) == 5
     assert snapshot.operation_collected.get(EventOperation.CREATION, 0) == 2
-    assert snapshot.operation_collected.get(EventOperation.UPDATE, 0) == 14
+    assert snapshot.operation_collected.get(EventOperation.UPDATE, 0) == 15
     assert snapshot.operation_collected.get(EventOperation.SUBMISSION, 0) == 1
 
     assert snapshot.attr_name_collected["last_edit_date"] == 1
     assert snapshot.attr_name_collected["editor_id"] == 2
     assert snapshot.attr_name_collected["editor_expiration_date"] == 2
     assert snapshot.attr_name_collected["edit_in_progress"] == 2
+    assert snapshot.attr_name_collected["edits"] == 1
     assert snapshot.attr_name_collected["status"] == 3
     assert snapshot.attr_name_collected["jobs"] == 1
     assert snapshot.attr_name_collected["submission_status"] == 3
@@ -254,7 +262,7 @@ def test_job_events():
     consumer.start()
 
     # Create scenario
-    scenario = tp.create_scenario(sc_config)
+    scenario = _ScenarioManagerFactory._build_manager()._create(sc_config)
     snapshot = consumer.capture()
     assert len(snapshot.collected_events) == 0
 
@@ -334,7 +342,7 @@ def test_data_node_events():
     consumer = RecordingConsumer(register_id, register_queue)
     consumer.start()
 
-    scenario = tp.create_scenario(sc_config)
+    scenario = _ScenarioManagerFactory._build_manager()._create(sc_config)
 
     snapshot = consumer.capture()
     # We expect two creation events since we have two data nodes:

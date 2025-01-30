@@ -1,4 +1,4 @@
-# Copyright 2023 Avaiga Private Limited
+# Copyright 2021-2025 Avaiga Private Limited
 #
 # Licensed under the Apache License, Version 2.0 (the "License"); you may not use this file except in compliance with
 # the License. You may obtain a copy of the License at
@@ -11,12 +11,15 @@
 
 from queue import SimpleQueue
 
-from src.taipy.core import taipy as tp
-from src.taipy.core.notification import EventEntityType, EventOperation
-from src.taipy.core.notification._topic import _Topic
-from src.taipy.core.notification.event import Event
-from src.taipy.core.notification.notifier import Notifier
-from taipy.config import Config, Frequency
+from taipy.common.config import Config, Frequency
+from taipy.core import taipy as tp
+from taipy.core._version._version_manager_factory import _VersionManagerFactory
+from taipy.core.notification import EventEntityType, EventOperation
+from taipy.core.notification._topic import _Topic
+from taipy.core.notification.event import Event
+from taipy.core.notification.notifier import Notifier
+from taipy.core.scenario._scenario_manager_factory import _ScenarioManagerFactory
+from taipy.core.submission.submission_status import SubmissionStatus
 
 
 def test_register():
@@ -317,7 +320,7 @@ def test_publish_creation_event():
 
     # Test CREATION Event
 
-    scenario = tp.create_scenario(scenario_config)
+    scenario = _ScenarioManagerFactory._build_manager()._create(scenario_config)
     cycle = scenario.cycle
     task = scenario.tasks[task_config.id]
     dn = scenario.data_nodes[dn_config.id]
@@ -339,13 +342,11 @@ def test_publish_creation_event():
     expected_event_entity_id = [cycle.id, dn.id, task.id, sequence.id, scenario.id]
 
     assert all(
-        [
-            event.entity_type == expected_event_types[i]
-            and event.entity_id == expected_event_entity_id[i]
-            and event.operation == EventOperation.CREATION
-            and event.attribute_name is None
-            for i, event in enumerate(published_events)
-        ]
+        event.entity_type == expected_event_types[i]
+        and event.entity_id == expected_event_entity_id[i]
+        and event.operation == EventOperation.CREATION
+        and event.attribute_name is None
+        for i, event in enumerate(published_events)
     )
 
 
@@ -359,7 +360,7 @@ def test_publish_update_event():
     )
     scenario_config.add_sequences({"sequence_config": [task_config]})
 
-    scenario = tp.create_scenario(scenario_config)
+    scenario = _ScenarioManagerFactory._build_manager()._create(scenario_config)
     cycle = scenario.cycle
     task = scenario.tasks[task_config.id]
     dn = scenario.data_nodes[dn_config.id]
@@ -538,13 +539,11 @@ def test_publish_update_event():
     expected_event_operation_type = [EventOperation.UPDATE] * len(expected_event_types)
 
     assert all(
-        [
-            event.entity_type == expected_event_types[i]
-            and event.entity_id == expected_event_entity_id[i]
-            and event.operation == expected_event_operation_type[i]
-            and event.attribute_name == expected_attribute_names[i]
-            for i, event in enumerate(published_events)
-        ]
+        event.entity_type == expected_event_types[i]
+        and event.entity_id == expected_event_entity_id[i]
+        and event.operation == expected_event_operation_type[i]
+        and event.attribute_name == expected_attribute_names[i]
+        for i, event in enumerate(published_events)
     )
 
 
@@ -558,7 +557,7 @@ def test_publish_update_event_in_context_manager():
     )
     scenario_config.add_sequences({"sequence_config": [task_config]})
 
-    scenario = tp.create_scenario(scenario_config)
+    scenario = _ScenarioManagerFactory._build_manager()._create(scenario_config)
     cycle = scenario.cycle
     task = scenario.tasks[task_config.id]
     dn = scenario.data_nodes[dn_config.id]
@@ -686,13 +685,11 @@ def test_publish_update_event_in_context_manager():
     ]
 
     assert all(
-        [
-            event.entity_type == expected_event_types[i]
-            and event.entity_id == expected_event_entity_id[i]
-            and event.operation == EventOperation.UPDATE
-            and event.attribute_name == expected_attribute_names[i]
-            for i, event in enumerate(published_events)
-        ]
+        event.entity_type == expected_event_types[i]
+        and event.entity_id == expected_event_entity_id[i]
+        and event.operation == EventOperation.UPDATE
+        and event.attribute_name == expected_attribute_names[i]
+        for i, event in enumerate(published_events)
     )
 
 
@@ -705,7 +702,7 @@ def test_publish_submission_event():
         "scenario_config", [task_config], frequency=Frequency.DAILY, flag="test"
     )
     scenario_config.add_sequences({"sequence_config": [task_config]})
-    scenario = tp.create_scenario(scenario_config)
+    scenario = _ScenarioManagerFactory._build_manager()._create(scenario_config)
 
     assert registration_queue.qsize() == 5
     while registration_queue.qsize() > 0:
@@ -713,7 +710,8 @@ def test_publish_submission_event():
 
     # Test SUBMISSION Event
 
-    job = scenario.submit()[0]
+    submission = scenario.submit()
+    job = submission.jobs[0]
 
     assert registration_queue.qsize() == 6
     published_events = []
@@ -737,16 +735,29 @@ def test_publish_submission_event():
         EventEntityType.SUBMISSION,
         EventEntityType.SCENARIO,
     ]
-    expected_event_entity_id = [job.submit_id, job.id, job.submit_id, job.id, job.submit_id, scenario.id]
+    expected_event_entity_id = [submission.id, job.id, submission.id, job.id, submission.id, scenario.id]
     assert all(
-        [
-            event.entity_type == expected_event_types[i]
-            and event.entity_id == expected_event_entity_id[i]
-            and event.operation == expected_operations[i]
-            and event.attribute_name == expected_attribute_names[i]
-            for i, event in enumerate(published_events)
-        ]
+        event.entity_type == expected_event_types[i]
+        and event.entity_id == expected_event_entity_id[i]
+        and event.operation == expected_operations[i]
+        and event.attribute_name == expected_attribute_names[i]
+        for i, event in enumerate(published_events)
     )
+    assert "job_triggered_submission_status_changed" in published_events[4].metadata
+    assert published_events[4].metadata["job_triggered_submission_status_changed"] == job.id
+
+    # Test updating submission_status manually will not add the job_triggered_submission_status_changed
+    # to the metadata as no job was used to update the submission_status
+    submission.submission_status = SubmissionStatus.CANCELED
+
+    assert registration_queue.qsize() == 1
+    published_event = registration_queue.get()
+
+    assert published_event.entity_type == EventEntityType.SUBMISSION
+    assert published_event.entity_id == submission.id
+    assert published_event.operation == EventOperation.UPDATE
+    assert published_event.attribute_name == "submission_status"
+    assert "job_triggered_submission_status_changed" not in published_event.metadata
 
 
 def test_publish_deletion_event():
@@ -758,12 +769,13 @@ def test_publish_deletion_event():
         "scenario_config", [task_config], frequency=Frequency.DAILY, flag="test"
     )
     scenario_config.add_sequences({"sequence_config": [task_config]})
-    scenario = tp.create_scenario(scenario_config)
+    scenario = _ScenarioManagerFactory._build_manager()._create(scenario_config)
     cycle = scenario.cycle
     task = scenario.tasks[task_config.id]
     dn = scenario.data_nodes[dn_config.id]
     sequence = scenario.sequences["sequence_config"]
-    job = scenario.submit()[0]
+    submission = scenario.submit()
+    job = submission.jobs[0]
 
     assert registration_queue.qsize() == 11
     while registration_queue.qsize() > 0:
@@ -788,20 +800,18 @@ def test_publish_deletion_event():
         EventEntityType.SUBMISSION,
     ]
 
-    expected_event_entity_id = [cycle.id, sequence.id, scenario.id, task.id, job.id, dn.id, job.submit_id]
+    expected_event_entity_id = [cycle.id, sequence.id, scenario.id, task.id, job.id, dn.id, submission.id]
     expected_event_operation_type = [EventOperation.DELETION] * len(expected_event_types)
 
     assert all(
-        [
-            event.entity_type == expected_event_types[i]
-            and event.entity_id == expected_event_entity_id[i]
-            and event.operation == expected_event_operation_type[i]
-            and event.attribute_name is None
-            for i, event in enumerate(published_events)
-        ]
+        event.entity_type == expected_event_types[i]
+        and event.entity_id == expected_event_entity_id[i]
+        and event.operation == expected_event_operation_type[i]
+        and event.attribute_name is None
+        for i, event in enumerate(published_events)
     )
 
-    scenario = tp.create_scenario(scenario_config)
+    scenario = _ScenarioManagerFactory._build_manager()._create(scenario_config)
     cycle = scenario.cycle
     assert registration_queue.qsize() == 5
 
@@ -809,8 +819,8 @@ def test_publish_deletion_event():
     while registration_queue.qsize() != 0:
         registration_queue.get()
 
-    tp.clean_all_entities_by_version()
-    assert registration_queue.qsize() == 5
+    tp.clean_all_entities(_VersionManagerFactory._build_manager()._get_latest_version())
+    assert registration_queue.qsize() == 6
 
     published_events = []
     while registration_queue.qsize() != 0:
@@ -818,19 +828,18 @@ def test_publish_deletion_event():
 
     expected_event_types = [
         EventEntityType.JOB,
+        EventEntityType.SUBMISSION,
         EventEntityType.CYCLE,
         EventEntityType.SCENARIO,
         EventEntityType.TASK,
         EventEntityType.DATA_NODE,
     ]
-    expected_event_entity_id = [None, cycle.id, scenario.id, None, None]
+    expected_event_entity_id = [None, None, cycle.id, scenario.id, None, None]
 
     assert all(
-        [
-            event.entity_type == expected_event_types[i]
-            and event.entity_id == expected_event_entity_id[i]
-            and event.operation == EventOperation.DELETION
-            and event.attribute_name is None
-            for i, event in enumerate(published_events)
-        ]
+        event.entity_type == expected_event_types[i]
+        and event.entity_id == expected_event_entity_id[i]
+        and event.operation == EventOperation.DELETION
+        and event.attribute_name is None
+        for i, event in enumerate(published_events)
     )

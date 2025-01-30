@@ -1,5 +1,5 @@
 /*
- * Copyright 2023 Avaiga Private Limited
+ * Copyright 2021-2025 Avaiga Private Limited
  *
  * Licensed under the Apache License, Version 2.0 (the "License"); you may not use this file except in compliance with
  * the License. You may obtain a copy of the License at
@@ -11,20 +11,22 @@
  * specific language governing permissions and limitations under the License.
  */
 
-import { Dispatch } from "react";
 import { PaletteMode } from "@mui/material";
 import { createTheme, Theme } from "@mui/material/styles";
-import { io, Socket } from "socket.io-client";
-import { v4 as uuidv4 } from "uuid";
 import merge from "lodash/merge";
+import { Dispatch } from "react";
+import { io, Socket } from "socket.io-client";
+import { nanoid } from "nanoid";
 
+import { FilterDesc } from "../components/Taipy/tableUtils";
+import { stylekitModeThemes, stylekitTheme } from "../themes/stylekit";
 import { getBaseURL, TIMEZONE_CLIENT } from "../utils";
 import { parseData } from "../utils/dataFormat";
 import { MenuProps } from "../utils/lov";
-import { FilterDesc } from "../components/Taipy/TableFilter";
-import { stylekitModeThemes, stylekitTheme } from "../themes/stylekit";
+import { changeFavicon, getLocalStorageValue, IdMessage, storeClientId } from "./utils";
+import { lightenPayload, sendWsMessage, TAIPY_CLIENT_ID, WsMessage } from "./wsUtils";
 
-enum Types {
+export enum Types {
     SocketConnected = "SOCKET_CONNECTED",
     Update = "UPDATE",
     MultipleUpdate = "MULTIPLE_UPDATE",
@@ -35,8 +37,8 @@ enum Types {
     SetLocations = "SET_LOCATIONS",
     SetTheme = "SET_THEME",
     SetTimeZone = "SET_TIMEZONE",
-    SetAlert = "SET_ALERT",
-    DeleteAlert = "DELETE_ALERT",
+    SetNotification = "SET_NOTIFICATION",
+    DeleteNotification = "DELETE_NOTIFICATION",
     SetBlock = "SET_BLOCK",
     Navigate = "NAVIGATE",
     ClientId = "CLIENT_ID",
@@ -45,6 +47,8 @@ enum Types {
     DownloadFile = "DOWNLOAD_FILE",
     Partial = "PARTIAL",
     Acknowledgement = "ACKNOWLEDGEMENT",
+    Broadcast = "BROADCAST",
+    LocalStorage = "LOCAL_STORAGE",
 }
 
 /**
@@ -60,7 +64,7 @@ export interface TaipyState {
     dateFormat?: string;
     dateTimeFormat?: string;
     numberFormat?: string;
-    alerts: AlertMessage[];
+    notifications: NotificationMessage[];
     block?: BlockMessage;
     navigateTo?: string;
     navigateParams?: Record<string, string>;
@@ -79,16 +83,17 @@ export interface TaipyBaseAction {
     type: Types;
 }
 
-interface NamePayload {
+export interface NamePayload {
     name: string;
     payload: Record<string, unknown>;
 }
 
-export interface AlertMessage {
+export interface NotificationMessage {
     atype: string;
     message: string;
     system: boolean;
     duration: number;
+    notificationId?: string;
 }
 
 interface TaipyAction extends NamePayload, TaipyBaseAction {
@@ -104,7 +109,11 @@ interface TaipyMultipleMessageAction extends TaipyBaseAction {
     actions: TaipyBaseAction[];
 }
 
-interface TaipyAlertAction extends TaipyBaseAction, AlertMessage {}
+interface TaipyNotificationAction extends TaipyBaseAction, NotificationMessage {}
+
+interface TaipyDeleteAlertAction extends TaipyBaseAction {
+    notificationId: string;
+}
 
 export const BLOCK_CLOSE = { action: "", message: "", close: true, noCancel: false } as BlockMessage;
 
@@ -117,7 +126,7 @@ export interface BlockMessage {
 
 interface TaipyBlockAction extends TaipyBaseAction, BlockMessage {}
 
-interface NavigateMessage {
+export interface NavigateMessage {
     to?: string;
     params?: Record<string, string>;
     tab?: string;
@@ -125,10 +134,6 @@ interface NavigateMessage {
 }
 
 interface TaipyNavigateAction extends TaipyBaseAction, NavigateMessage {}
-
-interface IdMessage {
-    id: string;
-}
 
 export interface FileDownloadProps {
     content?: string;
@@ -176,7 +181,7 @@ const getUserTheme = (mode: PaletteMode) => {
                     },
                 },
             },
-        })
+        }),
     );
 };
 
@@ -184,13 +189,6 @@ const themes = {
     light: getUserTheme("light"),
     dark: getUserTheme("dark"),
 };
-
-export const getLocalStorageValue = <T = string>(key: string, defaultValue: T, values?: T[]) => {
-    const val = localStorage && (localStorage.getItem(key) as unknown as T);
-    return !val ? defaultValue : !values ? val : values.indexOf(val) == -1 ? defaultValue : val;
-};
-
-const TAIPY_CLIENT_ID = "TaipyClientId";
 
 export const INITIAL_STATE: TaipyState = {
     data: {},
@@ -204,7 +202,7 @@ export const INITIAL_STATE: TaipyState = {
     id: getLocalStorageValue(TAIPY_CLIENT_ID, ""),
     menu: {},
     ackList: [],
-    alerts: [],
+    notifications: [],
 };
 
 export const taipyInitialize = (initialState: TaipyState): TaipyState => ({
@@ -213,16 +211,14 @@ export const taipyInitialize = (initialState: TaipyState): TaipyState => ({
     socket: io("/", { autoConnect: false, path: `${getBaseURL()}socket.io` }),
 });
 
-const storeClientId = (id: string) => localStorage && localStorage.setItem(TAIPY_CLIENT_ID, id);
-
-const messageToAction = (message: WsMessage) => {
+export const messageToAction = (message: WsMessage) => {
     if (message.type) {
         if (message.type === "MU" && Array.isArray(message.payload)) {
             return createMultipleUpdateAction(message.payload as NamePayload[]);
         } else if (message.type === "U") {
             return createUpdateAction(message as unknown as NamePayload);
         } else if (message.type === "AL") {
-            return createAlertAction(message as unknown as AlertMessage);
+            return createNotificationAction(message as unknown as NotificationMessage);
         } else if (message.type === "BL") {
             return createBlockAction(message as unknown as BlockMessage);
         } else if (message.type === "NA") {
@@ -230,7 +226,7 @@ const messageToAction = (message: WsMessage) => {
                 (message as unknown as NavigateMessage).to,
                 (message as unknown as NavigateMessage).params,
                 (message as unknown as NavigateMessage).tab,
-                (message as unknown as NavigateMessage).force
+                (message as unknown as NavigateMessage).force,
             );
         } else if (message.type === "ID") {
             return createIdAction((message as unknown as IdMessage).id);
@@ -240,18 +236,22 @@ const messageToAction = (message: WsMessage) => {
             return createPartialAction((message as unknown as Record<string, string>).name, true);
         } else if (message.type === "ACK") {
             return createAckAction((message as unknown as IdMessage).id);
+        } else if (message.type === "FV") {
+            changeFavicon((message.payload as Record<string, string>)?.value);
+        } else if (message.type == "BC") {
+            stackBroadcast((message as NamePayload).name, (message as NamePayload).payload.value);
         }
     }
     return {} as TaipyBaseAction;
 };
 
-const getWsMessageListener = (dispatch: Dispatch<TaipyBaseAction>) => {
+export const getWsMessageListener = (dispatch: Dispatch<TaipyBaseAction>) => {
     const dispatchWsMessage = (message: WsMessage) => {
         if (message.type === "MU" && Array.isArray(message.payload)) {
             const payloads = message.payload as NamePayload[];
             Promise.all(payloads.map((pl) => parseData(pl.payload.value as Record<string, unknown>)))
-                .then((vals) => {
-                    vals.forEach((val, idx) => (payloads[idx].payload.value = val));
+                .then((values) => {
+                    values.forEach((val, idx) => (payloads[idx].payload.value = val));
                     dispatch(messageToAction(message));
                 })
                 .catch(console.warn);
@@ -263,6 +263,25 @@ const getWsMessageListener = (dispatch: Dispatch<TaipyBaseAction>) => {
         dispatch(messageToAction(message));
     };
     return dispatchWsMessage;
+};
+
+// Broadcast
+const __BroadcastRepo: Record<string, Array<unknown>> = {};
+
+const stackBroadcast = (name: string, value: unknown) =>
+    (__BroadcastRepo[name] = __BroadcastRepo[name] || []).push(value);
+
+const broadcast_timeout = 250;
+
+const initializeBroadcastManagement = (dispatch: Dispatch<TaipyBaseAction>) => {
+    setInterval(() => {
+        Object.entries(__BroadcastRepo).forEach(([name, stack]) => {
+            const broadcastValue = stack.shift();
+            if (broadcastValue !== undefined) {
+                dispatch(createUpdateAction({ name, payload: { value: broadcastValue } }));
+            }
+        });
+    }, broadcast_timeout);
 };
 
 export const initializeWebSocket = (socket: Socket | undefined, dispatch: Dispatch<TaipyBaseAction>): void => {
@@ -290,16 +309,20 @@ export const initializeWebSocket = (socket: Socket | undefined, dispatch: Dispat
         socket.on("message", getWsMessageListener(dispatch));
         // only now does the socket tries to open/connect
         socket.connect();
+        // favicon
+        changeFavicon();
+        // broadcast
+        initializeBroadcastManagement(dispatch);
     }
 };
 
-const addRows = (previousRows: Record<string, unknown>[], newRows: Record<string, unknown>[], start: number) =>
+export const addRows = (previousRows: Record<string, unknown>[], newRows: Record<string, unknown>[], start: number) =>
     newRows.reduce((arr, row) => {
         arr[start++] = row;
         return arr;
     }, previousRows.concat([]));
 
-const storeBlockUi = (block?: BlockMessage) => () => {
+export const storeBlockUi = (block?: BlockMessage) => () => {
     if (localStorage) {
         if (block) {
             document.visibilityState !== "visible" && localStorage.setItem("TaipyBlockUi", JSON.stringify(block));
@@ -309,7 +332,7 @@ const storeBlockUi = (block?: BlockMessage) => () => {
     }
 };
 
-export const retreiveBlockUi = (): BlockMessage => {
+export const retrieveBlockUi = (): BlockMessage => {
     if (localStorage) {
         const val = localStorage.getItem("TaipyBlockUi");
         if (val) {
@@ -332,6 +355,7 @@ export const taipyReducer = (state: TaipyState, baseAction: TaipyBaseAction): Ta
         case Types.Update:
             const newValue = action.payload.value as Record<string, unknown>;
             const oldValue = (state.data[action.name] as Record<string, unknown>) || {};
+            delete oldValue.__taipy_refresh;
             if (typeof action.payload.infinite === "boolean" && action.payload.infinite) {
                 const start = newValue.start;
                 if (typeof start === "number") {
@@ -352,25 +376,27 @@ export const taipyReducer = (state: TaipyState, baseAction: TaipyBaseAction): Ta
             };
         case Types.SetLocations:
             return { ...state, locations: action.payload.value as Record<string, string> };
-        case Types.SetAlert:
-            const alertAction = action as unknown as TaipyAlertAction;
+        case Types.SetNotification:
+            const notificationAction = action as unknown as TaipyNotificationAction;
             return {
                 ...state,
-                alerts: [
-                    ...state.alerts,
+                notifications: [
+                    ...state.notifications,
                     {
-                        atype: alertAction.atype,
-                        message: alertAction.message,
-                        system: alertAction.system,
-                        duration: alertAction.duration,
+                        atype: notificationAction.atype,
+                        message: notificationAction.message,
+                        system: notificationAction.system,
+                        duration: notificationAction.duration,
+                        notificationId: notificationAction.notificationId || nanoid(),
                     },
                 ],
             };
-        case Types.DeleteAlert:
-            if (state.alerts.length) {
-                return { ...state, alerts: state.alerts.filter((_, i) => i) };
-            }
-            return state;
+        case Types.DeleteNotification:
+            const deleteNotificationAction = action as unknown as TaipyNotificationAction;
+            return {
+                ...state,
+                notifications: state.notifications.filter(notification => notification.notificationId !== deleteNotificationAction.notificationId),
+            };
         case Types.SetBlock:
             const blockAction = action as unknown as TaipyBlockAction;
             if (blockAction.close) {
@@ -471,7 +497,7 @@ export const taipyReducer = (state: TaipyState, baseAction: TaipyBaseAction): Ta
                 action.payload,
                 state.id,
                 action.context,
-                action.propagate
+                action.propagate,
             );
             break;
         case Types.Action:
@@ -483,17 +509,20 @@ export const taipyReducer = (state: TaipyState, baseAction: TaipyBaseAction): Ta
         case Types.RequestUpdate:
             ackId = sendWsMessage(state.socket, "RU", action.name, action.payload, state.id, action.context);
             break;
+        case Types.LocalStorage:
+            ackId = sendWsMessage(state.socket, "LS", action.name, action.payload, state.id, action.context);
+            break;
     }
     if (ackId) return { ...state, ackList: [...state.ackList, ackId] };
     return state;
 };
 
-const createUpdateAction = (payload: NamePayload): TaipyAction => ({
+export const createUpdateAction = (payload: NamePayload): TaipyAction => ({
     ...payload,
     type: Types.Update,
 });
 
-const createMultipleUpdateAction = (payload: NamePayload[]): TaipyMultipleAction => ({
+export const createMultipleUpdateAction = (payload: NamePayload[]): TaipyMultipleAction => ({
     type: Types.MultipleUpdate,
     payload: payload,
 });
@@ -521,7 +550,7 @@ export const createSendUpdateAction = (
     context: string | undefined,
     onChange?: string,
     propagate = true,
-    relName?: string
+    relName?: string,
 ): TaipyAction => ({
     type: Types.SendUpdate,
     name: name,
@@ -530,7 +559,7 @@ export const createSendUpdateAction = (
     payload: getPayload(value, onChange, relName),
 });
 
-const getPayload = (value: unknown, onChange?: string, relName?: string) => {
+export const getPayload = (value: unknown, onChange?: string, relName?: string) => {
     const ret: Record<string, unknown> = { value: value };
     if (relName) {
         ret.relvar = relName;
@@ -574,7 +603,7 @@ export const createRequestChartUpdateAction = (
     context: string | undefined,
     columns: string[],
     pageKey: string,
-    decimatorPayload: unknown | undefined
+    decimatorPayload: unknown | undefined,
 ): TaipyAction =>
     createRequestDataUpdateAction(
         name,
@@ -585,7 +614,7 @@ export const createRequestChartUpdateAction = (
         {
             decimatorPayload: decimatorPayload,
         },
-        true
+        true,
     );
 
 export const createRequestTableUpdateAction = (
@@ -602,21 +631,36 @@ export const createRequestTableUpdateAction = (
     applies?: Record<string, unknown>,
     styles?: Record<string, string>,
     tooltips?: Record<string, string>,
+    formats?: Record<string, string>,
     handleNan?: boolean,
-    filters?: Array<FilterDesc>
+    filters?: Array<FilterDesc>,
+    compare?: string,
+    compareDatas?: string,
+    stateContext?: Record<string, unknown>,
 ): TaipyAction =>
-    createRequestDataUpdateAction(name, id, context, columns, pageKey, {
-        start: start,
-        end: end,
-        orderby: orderBy,
-        sort: sort,
-        aggregates: aggregates,
-        applies: applies,
-        styles: styles,
-        tooltips: tooltips,
-        handlenan: handleNan,
-        filters: filters,
-    });
+    createRequestDataUpdateAction(
+        name,
+        id,
+        context,
+        columns,
+        pageKey,
+        lightenPayload({
+            start,
+            end,
+            orderby: orderBy,
+            sort,
+            aggregates,
+            applies,
+            styles,
+            tooltips,
+            formats,
+            handlenan: handleNan,
+            filters,
+            compare,
+            compare_datas: compareDatas,
+            state_context: stateContext,
+        }),
+    );
 
 export const createRequestInfiniteTableUpdateAction = (
     name: string | undefined,
@@ -632,22 +676,39 @@ export const createRequestInfiniteTableUpdateAction = (
     applies?: Record<string, unknown>,
     styles?: Record<string, string>,
     tooltips?: Record<string, string>,
+    formats?: Record<string, string>,
     handleNan?: boolean,
-    filters?: Array<FilterDesc>
+    filters?: Array<FilterDesc>,
+    compare?: string,
+    compareDatas?: string,
+    stateContext?: Record<string, unknown>,
+    reverse?: boolean,
 ): TaipyAction =>
-    createRequestDataUpdateAction(name, id, context, columns, pageKey, {
-        infinite: true,
-        start: start,
-        end: end,
-        orderby: orderBy,
-        sort: sort,
-        aggregates: aggregates,
-        applies: applies,
-        styles: styles,
-        tooltips: tooltips,
-        handlenan: handleNan,
-        filters: filters,
-    });
+    createRequestDataUpdateAction(
+        name,
+        id,
+        context,
+        columns,
+        pageKey,
+        lightenPayload({
+            infinite: true,
+            start,
+            end,
+            orderby: orderBy,
+            sort,
+            aggregates,
+            applies,
+            styles,
+            tooltips,
+            formats,
+            handlenan: handleNan,
+            filters,
+            compare,
+            compare_datas: compareDatas,
+            state_context: stateContext,
+            reverse: !!reverse,
+        }),
+    );
 
 /**
  * Create a *request data update* `Action` that will be used to update the `Context`.
@@ -677,7 +738,7 @@ export const createRequestDataUpdateAction = (
     pageKey: string,
     payload: Record<string, unknown>,
     allData = false,
-    library?: string
+    library?: string,
 ): TaipyAction => {
     payload = payload || {};
     if (id !== undefined) {
@@ -714,16 +775,18 @@ export const createRequestUpdateAction = (
     id: string | undefined,
     context: string | undefined,
     names: string[],
-    forceRefresh = false
+    forceRefresh = false,
+    stateContext?: Record<string, unknown>,
 ): TaipyAction => ({
     type: Types.RequestUpdate,
     name: "",
     context: context,
-    payload: {
+    payload: lightenPayload({
         id: id,
         names: names,
         refresh: forceRefresh,
-    },
+        state_context: stateContext,
+    }),
 });
 
 export const createSetLocationsAction = (locations: Record<string, string>): TaipyAction => ({
@@ -744,7 +807,7 @@ export const createTimeZoneAction = (timeZone: string, fromBackend = false): Tai
     payload: { timeZone: timeZone, fromBackend: fromBackend },
 });
 
-const getAlertType = (aType: string) => {
+const getNotificationType = (aType: string) => {
     aType = aType.trim();
     if (aType) {
         aType = aType.charAt(0).toLowerCase();
@@ -762,16 +825,18 @@ const getAlertType = (aType: string) => {
     return aType;
 };
 
-export const createAlertAction = (alert: AlertMessage): TaipyAlertAction => ({
-    type: Types.SetAlert,
-    atype: getAlertType(alert.atype),
-    message: alert.message,
-    system: alert.system,
-    duration: alert.duration,
+export const createNotificationAction = (notification: NotificationMessage): TaipyNotificationAction => ({
+    type: Types.SetNotification,
+    atype: getNotificationType(notification.atype),
+    message: notification.message,
+    system: notification.system,
+    duration: notification.duration,
+    notificationId: notification.notificationId,
 });
 
-export const createDeleteAlertAction = (): TaipyBaseAction => ({
-    type: Types.DeleteAlert,
+export const createDeleteAlertAction = (notificationId: string): TaipyDeleteAlertAction => ({
+    type: Types.DeleteNotification,
+    notificationId,
 });
 
 export const createBlockAction = (block: BlockMessage): TaipyBlockAction => ({
@@ -786,7 +851,7 @@ export const createNavigateAction = (
     to?: string,
     params?: Record<string, string>,
     tab?: string,
-    force?: boolean
+    force?: boolean,
 ): TaipyNavigateAction => ({
     type: Types.Navigate,
     to,
@@ -823,38 +888,8 @@ export const createPartialAction = (name: string, create: boolean): TaipyPartial
     create,
 });
 
-type WsMessageType = "A" | "U" | "DU" | "MU" | "RU" | "AL" | "BL" | "NA" | "ID" | "MS" | "DF" | "PR" | "ACK";
-
-interface WsMessage {
-    type: WsMessageType;
-    name: string;
-    payload: Record<string, unknown> | unknown;
-    propagate: boolean;
-    client_id: string;
-    module_context: string;
-    ack_id?: string;
-}
-
-const sendWsMessage = (
-    socket: Socket | undefined,
-    type: WsMessageType,
-    name: string,
-    payload: Record<string, unknown> | unknown,
-    id: string,
-    moduleContext = "",
-    propagate = true,
-    serverAck?: (val: unknown) => void
-): string => {
-    const ackId = uuidv4();
-    const msg: WsMessage = {
-        type: type,
-        name: name,
-        payload: payload,
-        propagate: propagate,
-        client_id: id,
-        ack_id: ackId,
-        module_context: moduleContext,
-    };
-    socket?.emit("message", msg, serverAck);
-    return ackId;
-};
+export const createLocalStorageAction = (localStorageData: Record<string, string>): TaipyAction => ({
+    type: Types.LocalStorage,
+    name: "",
+    payload: localStorageData,
+});

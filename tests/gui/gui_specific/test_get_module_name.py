@@ -1,4 +1,4 @@
-# Copyright 2023 Avaiga Private Limited
+# Copyright 2021-2025 Avaiga Private Limited
 #
 # Licensed under the Apache License, Version 2.0 (the "License"); you may not use this file except in compliance with
 # the License. You may obtain a copy of the License at
@@ -17,11 +17,11 @@ x = 10
 
 
 def test_get_module_name():
-    assert "tests.taipy.gui.gui_specific.test_get_module_name" == _get_module_name_from_frame(inspect.currentframe())
+    assert "tests.gui.gui_specific.test_get_module_name" == _get_module_name_from_frame(inspect.currentframe())
 
 
 def test_get_module_name_imported_var():
-    assert "tests.taipy.gui.gui_specific.test_get_module_name" == _get_module_name_from_imported_var(
+    assert "tests.gui.gui_specific.test_get_module_name" == _get_module_name_from_imported_var(
         "x", 10, "test_get_module_name"
     )
     assert "test_get_module_name" == _get_module_name_from_imported_var("x", 11, "test_get_module_name")

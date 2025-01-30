@@ -1,4 +1,4 @@
-# Copyright 2023 Avaiga Private Limited
+# Copyright 2021-2025 Avaiga Private Limited
 #
 # Licensed under the Apache License, Version 2.0 (the "License"); you may not use this file except in compliance with
 # the License. You may obtain a copy of the License at
@@ -9,9 +9,9 @@
 # an "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied. See the License for the
 # specific language governing permissions and limitations under the License.
 
-from src.taipy.core.sequence._sequence_converter import _SequenceConverter
-from src.taipy.core.sequence.sequence import Sequence
-from src.taipy.core.task.task import Task
+from taipy.core.sequence._sequence_converter import _SequenceConverter
+from taipy.core.sequence.sequence import Sequence
+from taipy.core.task.task import Task
 
 
 def test_entity_to_model(sequence):

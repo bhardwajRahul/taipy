@@ -1,25 +1,37 @@
+# Copyright 2021-2025 Avaiga Private Limited
+#
+# Licensed under the Apache License, Version 2.0 (the "License"); you may not use this file except in compliance with
+# the License. You may obtain a copy of the License at
+#
+#        http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software distributed under the License is distributed on
+# an "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied. See the License for the
+# specific language governing permissions and limitations under the License.
+
 from unittest.mock import Mock, patch
 
-import pytest
-
-from src.taipy.gui_core._context import _GuiCoreContext
-from taipy.config.common.scope import Scope
-from taipy.core import Job, Scenario, Task
+from taipy.common.config.common.scope import Scope
+from taipy.core import Job, JobId, Scenario, Task
 from taipy.core.data.pickle import PickleDataNode
+from taipy.core.reason import ReasonCollection
+from taipy.gui_core._context import _GuiCoreContext
 
-a_scenario = Scenario("scenario_config_id", [], {}, sequences={"sequence": {}})
+a_scenario = Scenario("scenario_config_id", None, {}, sequences={"sequence": {}})
 a_task = Task("task_config_id", {}, print)
-a_job = Job("JOB_job_id", a_task, "submit_id", a_scenario.id)
-a_job.isfinished = lambda s: True
+a_job = Job(JobId("JOB_job_id"), a_task, "submit_id", a_scenario.id)
+a_job.isfinished = lambda s: True  # type: ignore[attr-defined]
 a_datanode = PickleDataNode("data_node_config_id", Scope.SCENARIO)
 
 
-def mock_is_submittable_false(entity_id):
-    return False
+def mock_is_submittable_reason(entity_id):
+    reasons = ReasonCollection()
+    reasons._add_reason(entity_id, "a reason")
+    return reasons
 
 
-def mock_is_true(entity_id):
-    return True
+def mock_has_no_reason():
+    return ReasonCollection()
 
 
 def mock_core_get(entity_id):
@@ -39,8 +51,9 @@ class MockState:
 
 class TestGuiCoreContext_is_submittable:
     def test_submit_entity(self):
-        with patch("src.taipy.gui_core._context.core_get", side_effect=mock_core_get), patch(
-            "src.taipy.gui_core._context.is_submittable", side_effect=mock_is_true
+        with (
+            patch("taipy.gui_core._context.core_get", side_effect=mock_core_get),
+            patch("taipy.gui_core._context.is_submittable", side_effect=mock_has_no_reason),
         ):
             gui_core_context = _GuiCoreContext(Mock())
             assign = Mock()
@@ -50,14 +63,15 @@ class TestGuiCoreContext_is_submittable:
                 {
                     "args": [
                         {"name": "name", "id": a_scenario.id},
-                    ]
+                    ],
+                    "error_id": "error_var",
                 },
             )
             assign.assert_called_once()
-            assert assign.call_args.args[0] == "gui_core_sv_error"
+            assert assign.call_args.args[0] == "error_var"
             assert str(assign.call_args.args[1]).startswith("Error submitting entity.")
 
-            with patch("src.taipy.gui_core._context.is_submittable", side_effect=mock_is_submittable_false):
+            with patch("taipy.gui_core._context.is_submittable", side_effect=mock_is_submittable_reason):
                 assign.reset_mock()
                 gui_core_context.submit_entity(
                     MockState(assign=assign),
@@ -65,9 +79,10 @@ class TestGuiCoreContext_is_submittable:
                     {
                         "args": [
                             {"name": "name", "id": a_scenario.id},
-                        ]
+                        ],
+                        "error_id": "error_var",
                     },
                 )
                 assign.assert_called_once()
-                assert assign.call_args.args[0] == "gui_core_sv_error"
-                assert str(assign.call_args.args[1]).endswith("is not submittable.")
+                assert assign.call_args.args[0] == "error_var"
+                assert "is not submittable" in str(assign.call_args.args[1])

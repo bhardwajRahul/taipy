@@ -1,5 +1,5 @@
 /*
- * Copyright 2023 Avaiga Private Limited
+ * Copyright 2021-2025 Avaiga Private Limited
  *
  * Licensed under the Apache License, Version 2.0 (the "License"); you may not use this file except in compliance with
  * the License. You may obtain a copy of the License at
@@ -22,7 +22,7 @@ module.exports = (_env, options) => {
         entry: ["./src/index.ts"],
         output: {
             filename: "taipy-gui-core.js",
-            path: path.resolve(__dirname, "../../src/taipy/gui_core/lib"),
+            path: path.resolve(__dirname, "../../taipy/gui_core/lib"),
             library: {
                 // Camel case transformation of the library name "example"
                 name: "TaipyGuiCore",
@@ -57,7 +57,7 @@ module.exports = (_env, options) => {
                 // If this file is moved, this path must be updated
                 manifest: path.resolve(
                     __dirname,
-                    `${process.env.TAIPY_GUI_DIR}/taipy/gui/webapp/taipy-gui-deps-manifest.json`
+                    `${process.env.TAIPY_DIR}/taipy/gui/webapp/taipy-gui-deps-manifest.json`
                 ),
                 name: "TaipyGuiDependencies",
             }),

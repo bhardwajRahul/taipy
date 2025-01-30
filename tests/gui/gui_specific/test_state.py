@@ -1,4 +1,4 @@
-# Copyright 2023 Avaiga Private Limited
+# Copyright 2021-2025 Avaiga Private Limited
 #
 # Licensed under the Apache License, Version 2.0 (the "License"); you may not use this file except in compliance with
 # the License. You may obtain a copy of the License at
@@ -13,7 +13,7 @@ import inspect
 
 import pytest
 
-from taipy.gui import Gui, Markdown
+from taipy.gui import Gui
 
 from .state_asset.page1 import get_a, md_page1, set_a
 
@@ -23,14 +23,14 @@ def test_state(gui: Gui):
     gui._set_frame(inspect.currentframe())
     gui.add_page("page1", md_page1)
     gui.run(run_server=False, single_client=True)
-    state = gui._Gui__state
+    state = gui._Gui__state  # type: ignore[attr-defined]
     with gui.get_flask_app().app_context():
         assert state.a == 10
         assert state["page1"].a == 20
-        assert state["tests.taipy.gui.gui_specific.state_asset.page1"].a == 20
+        assert state["tests.gui.gui_specific.state_asset.page1"].a == 20
         assert state._gui == gui
         with pytest.raises(Exception) as e:
-            state.b
+            _ = state.b
         assert e.value.args[0] == "Variable 'b' is not defined."
 
         with pytest.raises(Exception) as e:
@@ -38,7 +38,7 @@ def test_state(gui: Gui):
         assert e.value.args[0] == "Variable 'b' is not accessible."
 
         with pytest.raises(Exception) as e:
-            state._taipy_p1
+            _ = state._taipy_p1
         assert e.value.args[0] == "Variable '_taipy_p1' is protected and is not accessible."
 
         with pytest.raises(Exception) as e:
@@ -54,6 +54,7 @@ def test_state(gui: Gui):
         assert state._get_placeholder_attrs() == (
             "_taipy_p1",
             "_current_context",
+            "__state_id"
         )
 
         assert get_a(state) == 20

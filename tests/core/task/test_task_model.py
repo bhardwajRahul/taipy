@@ -1,4 +1,4 @@
-# Copyright 2023 Avaiga Private Limited
+# Copyright 2021-2025 Avaiga Private Limited
 #
 # Licensed under the Apache License, Version 2.0 (the "License"); you may not use this file except in compliance with
 # the License. You may obtain a copy of the License at
@@ -9,10 +9,10 @@
 # an "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied. See the License for the
 # specific language governing permissions and limitations under the License.
 
-from src.taipy.core.data import InMemoryDataNode
-from src.taipy.core.data._data_manager_factory import _DataManagerFactory
-from src.taipy.core.task._task_model import _TaskModel
-from taipy.config.common.scope import Scope
+from taipy.common.config.common.scope import Scope
+from taipy.core.data import InMemoryDataNode
+from taipy.core.data._data_manager_factory import _DataManagerFactory
+from taipy.core.task._task_model import _TaskModel
 
 
 def test_none_properties_attribute_compatible():

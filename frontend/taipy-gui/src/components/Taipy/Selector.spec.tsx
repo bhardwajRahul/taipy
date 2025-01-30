@@ -1,5 +1,5 @@
 /*
- * Copyright 2023 Avaiga Private Limited
+ * Copyright 2021-2025 Avaiga Private Limited
  *
  * Licensed under the Apache License, Version 2.0 (the "License"); you may not use this file except in compliance with
  * the License. You may obtain a copy of the License at
@@ -177,8 +177,10 @@ describe("Selector Component", () => {
             const { getByTestId } = render(<Selector lov={lov} dropdown={true} />);
             getByTestId("ArrowDropDownIcon");
         });
-        it("displays as an simple input with default value", async () => {
-            const { getByText, getByTestId, queryAllByTestId } = render(<Selector lov={lov} defaultValue="id1" dropdown={true} />);
+        it("displays as a simple input with default value", async () => {
+            const { getByText, getByTestId, queryAllByTestId } = render(
+                <Selector lov={lov} defaultValue="id1" dropdown={true} />
+            );
             getByText("Item 1");
             expect(queryAllByTestId("CancelIcon")).toHaveLength(0);
             getByTestId("ArrowDropDownIcon");
@@ -187,10 +189,116 @@ describe("Selector Component", () => {
             const { getByTestId } = render(<Selector lov={lov} defaultValue="id1" dropdown={true} multiple={true} />);
             getByTestId("CancelIcon");
         });
+        it("is disabled", async () => {
+            const { getByText } = render(<Selector lov={lov} defaultValue="id1" active={false} dropdown={true} />);
+            const elt = getByText("Item 1");
+            expect(elt.parentElement).toHaveClass("Mui-disabled");
+        });
+        it("is enabled by default", async () => {
+            const { getByText } = render(<Selector lov={lov} defaultValue="id1" dropdown={true} />);
+            const elt = getByText("Item 1");
+            expect(elt.parentElement).not.toHaveClass("Mui-disabled");
+        });
+        it("is enabled by active", async () => {
+            const { getByText } = render(<Selector defaultValue="id1" lov={lov} active={true} dropdown={true} />);
+            const elt = getByText("Item 1");
+            expect(elt.parentElement).not.toHaveClass("Mui-disabled");
+        });
         it("opens a dropdown on click", async () => {
             const { getByText, getByRole, queryAllByRole } = render(<Selector lov={lov} dropdown={true} />);
             const butElt = getByRole("combobox");
-            expect(butElt).toBeInTheDocument()
+            expect(butElt).toBeInTheDocument();
+            await userEvent.click(butElt);
+            getByRole("listbox");
+            const elt = getByText("Item 2");
+            await userEvent.click(elt);
+            expect(queryAllByRole("listbox")).toHaveLength(0);
+        });
+        it("renders selectionMessage if defined", async () => {
+            const { getByText, getByRole } = render(<Selector lov={lov} dropdown={true} selectionMessage="a selection message" />);
+            const butElt = getByRole("combobox");
+            expect(butElt).toBeInTheDocument();
+            await userEvent.click(butElt);
+            getByRole("listbox");
+            const elt = getByText("Item 2");
+            await userEvent.click(elt);
+            const msg = getByText("a selection message");
+            expect(msg).toBeInTheDocument();
+        });
+        it("renders showSelectAll in dropdown if True", async () => {
+            const { getByText, getByRole } = render(<Selector lov={lov} dropdown={true} multiple={true} showSelectAll={true} />);
+            const checkElt = getByRole("checkbox");
+            expect(checkElt).toBeInTheDocument();
+            expect(checkElt).not.toBeChecked();
+            const butElt = getByRole("combobox");
+            await userEvent.click(butElt);
+            getByRole("listbox");
+            const elt = getByText("Item 2");
+            await userEvent.click(elt);
+            expect(checkElt.parentElement).toHaveClass("MuiCheckbox-indeterminate");
+            await userEvent.click(checkElt);
+            expect(checkElt).toBeChecked();
+        });
+        it("renders showSelectAll in list if True", async () => {
+            const { getByText, getByRole } = render(<Selector lov={lov} multiple={true} showSelectAll={true} />);
+            const msgElt = getByText(/select all/i);
+            expect(msgElt).toBeInTheDocument();
+            const checkElement = msgElt.parentElement?.querySelector("input");
+            expect(checkElement).not.toBeNull();
+            expect(checkElement).not.toBeChecked();
+            const elt = getByText("Item 2");
+            await userEvent.click(elt);
+            expect(checkElement?.parentElement).toHaveClass("MuiCheckbox-indeterminate");
+            checkElement && await userEvent.click(checkElement);
+            expect(checkElement).toBeChecked();
+        });
+    });
+
+    describe("Selector Component with dropdown + filter", () => {
+        //dropdown
+        it("displays as an empty control with arrow", async () => {
+            const { getByTestId } = render(<Selector lov={lov} dropdown={true} filter={true} />);
+            getByTestId("ArrowDropDownIcon");
+        });
+        it("displays as a simple input with default value", async () => {
+            const { getByRole, getByTestId, queryAllByTestId } = render(
+                <Selector lov={lov} defaultValue="id1" dropdown={true} filter={true} />
+            );
+            expect(getByRole("combobox")).toHaveValue("Item 1");
+            expect(queryAllByTestId("CancelIcon")).toHaveLength(0);
+            getByTestId("ArrowDropDownIcon");
+        });
+        it("displays a delete icon when multiple", async () => {
+            const { getByTestId } = render(
+                <Selector lov={lov} defaultValue="id1" dropdown={true} multiple={true} filter={true} />
+            );
+            getByTestId("CancelIcon");
+        });
+        it("is disabled", async () => {
+            const { getByRole } = render(
+                <Selector lov={lov} defaultValue="id1" active={false} dropdown={true} filter={true} />
+            );
+            const elt = getByRole("combobox");
+            expect(elt.parentElement).toHaveClass("Mui-disabled");
+        });
+        it("is enabled by default", async () => {
+            const { getByRole } = render(<Selector lov={lov} defaultValue="id1" dropdown={true} filter={true} />);
+            const elt = getByRole("combobox");
+            expect(elt.parentElement).not.toHaveClass("Mui-disabled");
+        });
+        it("is enabled by active", async () => {
+            const { getByRole } = render(
+                <Selector defaultValue="id1" lov={lov} active={true} dropdown={true} filter={true} />
+            );
+            const elt = getByRole("combobox");
+            expect(elt.parentElement).not.toHaveClass("Mui-disabled");
+        });
+        it("opens a dropdown on click", async () => {
+            const { getByText, getByRole, queryAllByRole } = render(
+                <Selector lov={lov} dropdown={true} filter={true} />
+            );
+            const butElt = getByRole("combobox");
+            expect(butElt).toBeInTheDocument();
             await userEvent.click(butElt);
             getByRole("listbox");
             const elt = getByText("Item 2");
@@ -198,4 +306,78 @@ describe("Selector Component", () => {
             expect(queryAllByRole("listbox")).toHaveLength(0);
         });
     });
+    describe("Selector Component radio mode", () => {
+        //dropdown
+        it("displays a list of unselected radios", async () => {
+            const { getByText, getByRole } = render(<Selector lov={lov} mode="radio" className="taipy-selector" />);
+            getByText("Item 1");
+            getByRole("radiogroup");
+            expect(document.querySelector("div.taipy-selector-radio-group")).not.toBeNull();
+        });
+        it("displays a list of radios with one selected", async () => {
+            const { getByText } = render(<Selector lov={lov} defaultValue="id1" mode="radio" />);
+            const elt = getByText("Item 1");
+            expect(elt.parentElement?.querySelector("span.Mui-checked")).not.toBeNull();
+        });
+        it("selects on click", async () => {
+            const { getByText, getByRole, queryAllByRole } = render(
+                <Selector lov={lov} defaultValue="id1" mode="radio" />
+            );
+            const elt = getByText("Item 2");
+            expect(elt.parentElement?.querySelector("span.Mui-checked")).toBeNull();
+            await userEvent.click(elt);
+            expect(elt.parentElement?.querySelector("span.Mui-checked")).not.toBeNull();
+        });
+        it("sets the correct height for the radio mode", async () => {
+            const height = "200px";
+            const { getByRole } = render(<Selector lov={lov} mode="radio" height={height} />);
+            const selector = getByRole("radiogroup");
+            const style = window.getComputedStyle(selector);
+            expect(style.maxHeight).toBe(height);
+          });
+    });
+
+    describe("Selector Component check mode", () => {
+        //dropdown
+        it("displays a list of unselected checks", async () => {
+            const { getByText } = render(<Selector lov={lov} mode="check" className="taipy-selector" />);
+            const elt = getByText("Item 1");
+            expect(elt.parentElement?.parentElement).toHaveClass("taipy-selector-check-group");
+            expect(document.querySelector("span.MuiCheckbox-root")).not.toBeNull();
+        });
+        it("displays a list of checks with one selected", async () => {
+            const { getByText } = render(<Selector lov={lov} defaultValue="id1" mode="check" />);
+            const elt = getByText("Item 1");
+            expect(elt.parentElement?.querySelector("span.Mui-checked")).not.toBeNull();
+        });
+        it("selects on click", async () => {
+            const { getByText, getByRole, queryAllByRole } = render(
+                <Selector lov={lov} defaultValue="id1" mode="check" />
+            );
+            const elt1 = getByText("Item 1");
+            expect(elt1.parentElement?.querySelector("span.Mui-checked")).not.toBeNull();
+            const elt2 = getByText("Item 2");
+            expect(elt2.parentElement?.querySelector("span.Mui-checked")).toBeNull();
+            await userEvent.click(elt2);
+            expect(elt1.parentElement?.querySelector("span.Mui-checked")).not.toBeNull();
+            expect(elt2.parentElement?.querySelector("span.Mui-checked")).not.toBeNull();
+            const elt3 = getByText("Item 3");
+            expect(elt3.parentElement?.querySelector("span.Mui-checked")).toBeNull();
+            await userEvent.click(elt3);
+            expect(elt1.parentElement?.querySelector("span.Mui-checked")).not.toBeNull();
+            expect(elt2.parentElement?.querySelector("span.Mui-checked")).not.toBeNull();
+            expect(elt3.parentElement?.querySelector("span.Mui-checked")).not.toBeNull();
+            await userEvent.click(elt1);
+            expect(elt1.parentElement?.querySelector("span.Mui-checked")).toBeNull();
+            expect(elt2.parentElement?.querySelector("span.Mui-checked")).not.toBeNull();
+            expect(elt3.parentElement?.querySelector("span.Mui-checked")).not.toBeNull();
+        });
+    });
+    it("sets the correct height for the check mode", async () => {
+        const height = "200px";
+        const { container } = render(<Selector lov={lov} mode="check" height={height} />);
+        const selector = container.querySelector(".MuiFormGroup-root");
+        const style = window.getComputedStyle(selector!);
+        expect(style.maxHeight).toBe(height);
+      });
 });

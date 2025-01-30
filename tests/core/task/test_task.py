@@ -1,4 +1,4 @@
-# Copyright 2023 Avaiga Private Limited
+# Copyright 2021-2025 Avaiga Private Limited
 #
 # Licensed under the Apache License, Version 2.0 (the "License"); you may not use this file except in compliance with
 # the License. You may obtain a copy of the License at
@@ -13,16 +13,19 @@ from unittest import mock
 
 import pytest
 
-from src.taipy.core.config.data_node_config import DataNodeConfig
-from src.taipy.core.data._data_manager import _DataManager
-from src.taipy.core.data.csv import CSVDataNode
-from src.taipy.core.data.data_node import DataNode
-from src.taipy.core.data.in_memory import InMemoryDataNode
-from src.taipy.core.task._task_manager import _TaskManager
-from src.taipy.core.task.task import Task
-from taipy.config.common.scope import Scope
-from taipy.config.config import Config
-from taipy.config.exceptions.exceptions import InvalidConfigurationId
+from taipy.common.config import Config
+from taipy.common.config.common.scope import Scope
+from taipy.common.config.exceptions.exceptions import InvalidConfigurationId
+from taipy.core.config.data_node_config import DataNodeConfig
+from taipy.core.data._data_manager import _DataManager
+from taipy.core.data.csv import CSVDataNode
+from taipy.core.data.data_node import DataNode
+from taipy.core.data.in_memory import InMemoryDataNode
+from taipy.core.exceptions import AttributeKeyAlreadyExisted
+from taipy.core.scenario._scenario_manager import _ScenarioManager
+from taipy.core.task._task_manager import _TaskManager
+from taipy.core.task._task_manager_factory import _TaskManagerFactory
+from taipy.core.task.task import Task
 
 
 @pytest.fixture
@@ -45,6 +48,21 @@ def input_config():
     return [DataNodeConfig("input_name_1"), DataNodeConfig("input_name_2"), DataNodeConfig("input_name_3")]
 
 
+def test_task_equals(task):
+    task_manager = _TaskManagerFactory()._build_manager()
+
+    task_id = task.id
+    task_manager._set(task)
+
+    # To test if instance is same type
+    dn = CSVDataNode("foo_bar", Scope.SCENARIO, task_id)
+
+    task_2 = task_manager._get(task_id)
+    assert task == task_2
+    assert task != task_id
+    assert task != dn
+
+
 def test_create_task():
     name = "name_1"
     task = Task(name, {}, print, [], [])
@@ -64,7 +82,7 @@ def test_create_task():
     assert task.foo == foo_dn
     assert task.foo.path == path
     with pytest.raises(AttributeError):
-        task.bar
+        _ = task.bar
 
     task = Task("name_1", {}, print, [foo_dn], [], parent_ids={"parent_id"})
     assert task.parent_ids == {"parent_id"}
@@ -78,10 +96,10 @@ def test_create_task():
     assert task.owner_id == "owner_id"
     assert task.parent_ids == {"parent_id_1", "parent_id_2"}
     assert task.name_1ea == abc_dn
-    assert task.name_1ea.path == path
+    assert task.name_1ea.properties["path"] == path
     with pytest.raises(AttributeError):
-        task.bar
-    with mock.patch("src.taipy.core.get") as get_mck:
+        _ = task.bar
+    with mock.patch("taipy.core.get") as get_mck:
 
         class MockOwner:
             label = "owner_label"
@@ -94,10 +112,24 @@ def test_create_task():
         assert task.get_simple_label() == task.config_id
 
 
+def test_get_set_attribute():
+    dn_cfg = Config.configure_data_node("bar")
+    task_config = Config.configure_task("print", print, [dn_cfg], None)
+    scenario_config = Config.configure_scenario("scenario", [task_config])
+    scenario = _ScenarioManager._create(scenario_config)
+    task = scenario.tasks["print"]
+
+    task.key = "value"
+    assert task.key == "value"
+
+    with pytest.raises(AttributeKeyAlreadyExisted):
+        task.bar = "KeyAlreadyUsed"
+
+
 def test_can_not_change_task_output(output):
     task = Task("name_1", {}, print, output=output)
 
-    with pytest.raises(Exception):
+    with pytest.raises(AttributeError):
         task.output = {}
 
     assert list(task.output.values()) == output
@@ -108,7 +140,7 @@ def test_can_not_change_task_output(output):
 def test_can_not_change_task_input(input):
     task = Task("name_1", {}, print, input=input)
 
-    with pytest.raises(Exception):
+    with pytest.raises(AttributeError):
         task.input = {}
 
     assert list(task.input.values()) == input
@@ -120,7 +152,7 @@ def test_can_not_change_task_config_output(output_config):
     task_config = Config.configure_task("name_1", print, [], output=output_config)
 
     assert task_config.output_configs == output_config
-    with pytest.raises(Exception):
+    with pytest.raises(AttributeError):
         task_config.output_configs = []
 
     output_config.append(output_config[0])
@@ -196,6 +228,38 @@ def test_auto_set_and_reload(data_node):
     assert task_1.parent_ids == {"sc1"}
     assert task_2.parent_ids == {"sc1"}
 
+    with task_1 as task:
+        assert task.config_id == "foo"
+        assert task.owner_id is None
+        assert task.function == mock_func
+        assert not task.skippable
+        assert task._is_in_context
+
+        task.function = print
+        task.skippable = True
+
+        assert task.config_id == "foo"
+        assert task.owner_id is None
+        assert task.function == mock_func
+        assert not task.skippable
+        assert task._is_in_context
+
+    assert task_1.config_id == "foo"
+    assert task_1.owner_id is None
+    assert task_1.function == print
+    assert task.skippable
+    assert not task_1._is_in_context
+
+
+def test_auto_set_and_reload_properties():
+    task_1 = Task(
+        config_id="foo", properties={}, function=print, input=None, output=None, owner_id=None, skippable=False
+    )
+
+    _TaskManager._set(task_1)
+
+    task_2 = _TaskManager._get(task_1)
+
     # auto set & reload on properties attribute
     assert task_1.properties == {}
     assert task_2.properties == {}
@@ -244,47 +308,33 @@ def test_auto_set_and_reload(data_node):
     task_1.properties.update({"temp_key_3": 1})
     assert task_1.properties == {"qux": 5, "temp_key_3": 1}
     assert task_2.properties == {"qux": 5, "temp_key_3": 1}
-    task_1.properties.update(dict())
+    task_1.properties.update({})
     assert task_1.properties == {"qux": 5, "temp_key_3": 1}
     assert task_2.properties == {"qux": 5, "temp_key_3": 1}
     task_1.properties["temp_key_4"] = 0
     task_1.properties["temp_key_5"] = 0
 
     with task_1 as task:
-        assert task.config_id == "foo"
-        assert task.owner_id is None
-        assert task.function == mock_func
-        assert not task.skippable
         assert task._is_in_context
         assert task.properties["qux"] == 5
         assert task.properties["temp_key_3"] == 1
         assert task.properties["temp_key_4"] == 0
         assert task.properties["temp_key_5"] == 0
 
-        task.function = print
-        task.skippable = True
         task.properties["qux"] = 9
         task.properties.pop("temp_key_3")
         task.properties.pop("temp_key_4")
         task.properties.update({"temp_key_4": 1})
         task.properties.update({"temp_key_5": 2})
         task.properties.pop("temp_key_5")
-        task.properties.update(dict())
+        task.properties.update({})
 
-        assert task.config_id == "foo"
-        assert task.owner_id is None
-        assert task.function == mock_func
-        assert not task.skippable
         assert task._is_in_context
         assert task.properties["qux"] == 5
         assert task.properties["temp_key_3"] == 1
         assert task.properties["temp_key_4"] == 0
         assert task.properties["temp_key_5"] == 0
 
-    assert task_1.config_id == "foo"
-    assert task_1.owner_id is None
-    assert task_1.function == print
-    assert task.skippable
     assert not task_1._is_in_context
     assert task_1.properties["qux"] == 9
     assert "temp_key_3" not in task_1.properties.keys()
@@ -293,12 +343,12 @@ def test_auto_set_and_reload(data_node):
 
 
 def test_get_parents(task):
-    with mock.patch("src.taipy.core.get_parents") as mck:
+    with mock.patch("taipy.core.get_parents") as mck:
         task.get_parents()
         mck.assert_called_once_with(task)
 
 
 def test_submit_task(task: Task):
-    with mock.patch("src.taipy.core.task._task_manager._TaskManager._submit") as mock_submit:
+    with mock.patch("taipy.core.task._task_manager._TaskManager._submit") as mock_submit:
         task.submit([], True)
         mock_submit.assert_called_once_with(task, [], True, False, None)

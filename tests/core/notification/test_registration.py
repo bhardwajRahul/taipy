@@ -1,4 +1,4 @@
-# Copyright 2023 Avaiga Private Limited
+# Copyright 2021-2025 Avaiga Private Limited
 #
 # Licensed under the Apache License, Version 2.0 (the "License"); you may not use this file except in compliance with
 # the License. You may obtain a copy of the License at
@@ -12,9 +12,9 @@
 
 from queue import SimpleQueue
 
-from src.taipy.core.notification import EventEntityType, EventOperation
-from src.taipy.core.notification._registration import _Registration
-from src.taipy.core.notification._topic import _Topic
+from taipy.core.notification import EventEntityType, EventOperation
+from taipy.core.notification._registration import _Registration
+from taipy.core.notification._topic import _Topic
 
 
 def test_create_registration():

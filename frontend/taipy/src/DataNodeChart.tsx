@@ -1,5 +1,5 @@
 /*
- * Copyright 2023 Avaiga Private Limited
+ * Copyright 2021-2025 Avaiga Private Limited
  *
  * Licensed under the Apache License, Version 2.0 (the "License"); you may not use this file except in compliance with
  * the License. You may obtain a copy of the License at
@@ -13,12 +13,17 @@
 
 import React, { useEffect, useState, useCallback, useMemo, MouseEvent, Fragment, ChangeEvent } from "react";
 
-import { DeleteOutline, Add, RefreshOutlined, TableChartOutlined, BarChartOutlined } from "@mui/icons-material";
+import Add from "@mui/icons-material/Add";
+import BarChartOutlined from "@mui/icons-material/BarChartOutlined";
+import DeleteOutline from "@mui/icons-material/DeleteOutline";
+import RefreshOutlined from "@mui/icons-material/RefreshOutlined";
+import TableChartOutlined from "@mui/icons-material/TableChartOutlined";
+
 import Box from "@mui/material/Box";
 import Button from "@mui/material/Button";
 import FormControl from "@mui/material/FormControl";
 import FormControlLabel from "@mui/material/FormControlLabel";
-import Grid from "@mui/material/Grid";
+import Grid from "@mui/material/Grid2";
 import IconButton from "@mui/material/IconButton";
 import InputLabel from "@mui/material/InputLabel";
 import OutlinedInput from "@mui/material/OutlinedInput";
@@ -33,7 +38,7 @@ import Tooltip from "@mui/material/Tooltip";
 
 import { Chart, ColumnDesc, TraceValueType } from "taipy-gui";
 
-import { ChartViewType, MenuProps, TableViewType, selectSx, tabularHeaderSx } from "./utils";
+import { ChartViewType, MenuProps, TableViewType, tabularHeaderSx } from "./utils";
 
 interface DataNodeChartProps {
     active: boolean;
@@ -42,10 +47,12 @@ interface DataNodeChartProps {
     columns?: Record<string, ColumnDesc>;
     defaultConfig?: string;
     updateVarName?: string;
-    uniqid: string;
+    uniqId: string;
     chartConfigs?: string;
     onViewTypeChange: (e: MouseEvent, value?: string) => void;
 }
+
+const TraceSx = { pl: 2 };
 
 const DefaultAxis = ["x", "y"];
 
@@ -126,7 +133,7 @@ const ColSelect = (props: ColSelectProps) => {
     useEffect(() => setCol(getTraceCol(traceConf, trace, axis)), [traceConf, trace, axis]);
 
     return (
-        <FormControl sx={selectSx}>
+        <FormControl>
             <InputLabel id={labelId}>{label}</InputLabel>
             <Select
                 labelId={labelId}
@@ -174,7 +181,7 @@ const TypeSelect = (props: TypeSelectProps) => {
     useEffect(() => setType(value), [value]);
 
     return (
-        <FormControl sx={selectSx}>
+        <FormControl>
             <InputLabel id={labelId}>{label}</InputLabel>
             <Select
                 labelId={labelId}
@@ -233,23 +240,32 @@ const getBaseConfig = (defaultConfig?: string, chartConfigs?: string, configId?:
 };
 
 const DataNodeChart = (props: DataNodeChartProps) => {
-    const { defaultConfig = "", uniqid, configId, chartConfigs = "", onViewTypeChange } = props;
+    const { defaultConfig = "", uniqId, configId, chartConfigs = "", onViewTypeChange } = props;
 
     const [config, setConfig] = useState<ChartConfig | undefined>(undefined);
     useEffect(() => {
+        let localConf: ChartConfig | undefined = undefined;
         const localItem = localStorage && localStorage.getItem(`${configId}-chart-config`);
         if (localItem) {
             try {
-                const conf = JSON.parse(localItem);
-                conf.cumulative && addCumulative(conf);
-                setConfig(conf);
-                return;
+                localConf = JSON.parse(localItem);
             } catch {
                 // do nothing
             }
         }
         const conf = getBaseConfig(defaultConfig, chartConfigs, configId);
-        if (conf) {
+        if (localConf && localConf.traces) {
+            if (
+                conf &&
+                conf.columns &&
+                localConf.traces.some((tr) => tr.some((id) => (conf.columns || {})[id] === undefined))
+            ) {
+                setConfig(conf);
+            } else {
+                localConf.cumulative && addCumulative(localConf);
+                setConfig(localConf);
+            }
+        } else if (conf) {
             setConfig(conf);
         }
     }, [defaultConfig, configId, chartConfigs]);
@@ -285,8 +301,8 @@ const DataNodeChart = (props: DataNodeChartProps) => {
                 cfg
                     ? storeConf(configId, {
                           ...cfg,
-                          traces: (cfg.traces || []).map((axises, idx) =>
-                              idx == trace ? (axises.map((a, j) => (j == axis ? col : a)) as [string, string]) : axises
+                          traces: (cfg.traces || []).map((axes, idx) =>
+                              idx == trace ? (axes.map((a, j) => (j == axis ? col : a)) as [string, string]) : axes
                           ),
                       })
                     : cfg
@@ -354,7 +370,7 @@ const DataNodeChart = (props: DataNodeChartProps) => {
     return (
         <>
             <Grid container sx={tabularHeaderSx}>
-                <Grid item>
+                <Grid>
                     <Box className="taipy-toggle">
                         <ToggleButtonGroup onChange={onViewTypeChange} exclusive value={ChartViewType} color="primary">
                             <ToggleButton value={TableViewType}>
@@ -366,7 +382,7 @@ const DataNodeChart = (props: DataNodeChartProps) => {
                         </ToggleButtonGroup>
                     </Box>
                 </Grid>
-                <Grid item>
+                <Grid>
                     <FormControlLabel
                         control={
                             <Switch checked={!!config?.cumulative} onChange={onCumulativeChange} color="primary" />
@@ -374,9 +390,15 @@ const DataNodeChart = (props: DataNodeChartProps) => {
                         label="Cumulative"
                     />
                 </Grid>
-                <Grid item>
-                    <Button onClick={resetConfig} variant="text" color="primary" className="taipy-button">
-                        <RefreshOutlined /> Reset View
+                <Grid>
+                    <Button
+                        onClick={resetConfig}
+                        variant="text"
+                        color="primary"
+                        className="taipy-button"
+                        startIcon={<RefreshOutlined />}
+                    >
+                        Reset View
                     </Button>
                 </Grid>
             </Grid>
@@ -384,13 +406,13 @@ const DataNodeChart = (props: DataNodeChartProps) => {
                 <Grid container alignItems="center">
                     {config?.traces && config?.types
                         ? config?.traces.map((tc, idx) => {
-                              const baseLabelId = `${uniqid}-trace${idx}-"`;
+                              const baseLabelId = `${uniqId}-trace${idx}-"`;
                               return (
                                   <Fragment key={idx}>
-                                      <Grid item xs={2}>
+                                      <Grid size={2} sx={TraceSx}>
                                           Trace {idx + 1}
                                       </Grid>
-                                      <Grid item xs={3}>
+                                      <Grid size={3}>
                                           <TypeSelect
                                               trace={idx}
                                               label="Category"
@@ -399,7 +421,7 @@ const DataNodeChart = (props: DataNodeChartProps) => {
                                               value={config.types ? config.types[idx] : ""}
                                           />
                                       </Grid>
-                                      <Grid item xs={3}>
+                                      <Grid size={3}>
                                           <ColSelect
                                               trace={idx}
                                               axis={0}
@@ -410,7 +432,7 @@ const DataNodeChart = (props: DataNodeChartProps) => {
                                               setColConf={setColConf}
                                           />{" "}
                                       </Grid>
-                                      <Grid item xs={3}>
+                                      <Grid size={3}>
                                           <ColSelect
                                               trace={idx}
                                               axis={1}
@@ -422,7 +444,7 @@ const DataNodeChart = (props: DataNodeChartProps) => {
                                               withNone
                                           />
                                       </Grid>
-                                      <Grid item xs={1}>
+                                      <Grid size={1}>
                                           {config.traces && config.traces.length > 1 ? (
                                               <Tooltip title="Remove Trace">
                                                   <IconButton onClick={onRemoveTrace} data-idx={idx}>
@@ -435,9 +457,8 @@ const DataNodeChart = (props: DataNodeChartProps) => {
                               );
                           })
                         : null}
-                    <Grid item xs={12}>
-                        <Button onClick={onAddTrace}>
-                            <Add color="primary" />
+                    <Grid size={12}>
+                        <Button onClick={onAddTrace} startIcon={<Add color="primary" />}>
                             Add trace
                         </Button>
                     </Grid>

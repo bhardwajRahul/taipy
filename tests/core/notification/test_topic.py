@@ -1,4 +1,4 @@
-# Copyright 2023 Avaiga Private Limited
+# Copyright 2021-2025 Avaiga Private Limited
 #
 # Licensed under the Apache License, Version 2.0 (the "License"); you may not use this file except in compliance with
 # the License. You may obtain a copy of the License at
@@ -11,9 +11,9 @@
 
 import pytest
 
-from src.taipy.core.exceptions.exceptions import InvalidEventOperation
-from src.taipy.core.notification._topic import _Topic
-from src.taipy.core.notification.event import EventEntityType, EventOperation
+from taipy.core.exceptions.exceptions import InvalidEventOperation
+from taipy.core.notification._topic import _Topic
+from taipy.core.notification.event import EventEntityType, EventOperation
 
 
 def test_general_topic_creation():

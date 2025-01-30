@@ -1,4 +1,4 @@
-# Copyright 2023 Avaiga Private Limited
+# Copyright 2021-2025 Avaiga Private Limited
 #
 # Licensed under the Apache License, Version 2.0 (the "License"); you may not use this file except in compliance with
 # the License. You may obtain a copy of the License at
@@ -8,29 +8,48 @@
 # Unless required by applicable law or agreed to in writing, software distributed under the License is distributed on
 # an "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied. See the License for the
 # specific language governing permissions and limitations under the License.
-
 from datetime import datetime, timedelta
 from unittest import mock
 
 import pytest
 
-from src.taipy.core.common._utils import _Subscriber
-from src.taipy.core.cycle._cycle_manager_factory import _CycleManagerFactory
-from src.taipy.core.cycle.cycle import Cycle, CycleId
-from src.taipy.core.data._data_manager_factory import _DataManagerFactory
-from src.taipy.core.data.in_memory import DataNode, InMemoryDataNode
-from src.taipy.core.data.pickle import PickleDataNode
-from src.taipy.core.exceptions.exceptions import SequenceTaskDoesNotExistInScenario
-from src.taipy.core.scenario._scenario_manager_factory import _ScenarioManagerFactory
-from src.taipy.core.scenario.scenario import Scenario
-from src.taipy.core.scenario.scenario_id import ScenarioId
-from src.taipy.core.sequence.sequence import Sequence
-from src.taipy.core.sequence.sequence_id import SequenceId
-from src.taipy.core.task._task_manager_factory import _TaskManagerFactory
-from src.taipy.core.task.task import Task, TaskId
-from taipy.config import Frequency
-from taipy.config.common.scope import Scope
-from taipy.config.exceptions.exceptions import InvalidConfigurationId
+from taipy.common.config import Config, Frequency
+from taipy.common.config.common.scope import Scope
+from taipy.common.config.exceptions.exceptions import InvalidConfigurationId
+from taipy.core import create_scenario
+from taipy.core.common._utils import _Subscriber
+from taipy.core.cycle._cycle_manager_factory import _CycleManagerFactory
+from taipy.core.cycle.cycle import Cycle, CycleId
+from taipy.core.data._data_manager_factory import _DataManagerFactory
+from taipy.core.data.in_memory import DataNode, InMemoryDataNode
+from taipy.core.data.pickle import PickleDataNode
+from taipy.core.exceptions.exceptions import (
+    AttributeKeyAlreadyExisted,
+    SequenceAlreadyExists,
+    SequenceTaskDoesNotExistInScenario,
+)
+from taipy.core.scenario._scenario_manager_factory import _ScenarioManagerFactory
+from taipy.core.scenario.scenario import Scenario
+from taipy.core.scenario.scenario_id import ScenarioId
+from taipy.core.sequence.sequence import Sequence
+from taipy.core.sequence.sequence_id import SequenceId
+from taipy.core.task._task_manager_factory import _TaskManagerFactory
+from taipy.core.task.task import Task, TaskId
+
+
+def test_scenario_equals(scenario):
+    scenario_manager = _ScenarioManagerFactory()._build_manager()
+
+    scenario_id = scenario.id
+    scenario_manager._set(scenario)
+
+    # To test if instance is same type
+    task = Task("task", {}, print, [], [], scenario_id)
+
+    scenario_2 = scenario_manager._get(scenario_id)
+    assert scenario == scenario_2
+    assert scenario != scenario_id
+    assert scenario != task
 
 
 def test_create_primary_scenario(cycle):
@@ -42,14 +61,14 @@ def test_create_primary_scenario(cycle):
     assert scenario.data_nodes == {}
     assert scenario.sequences == {}
     assert scenario.properties == {"key": "value"}
-    assert scenario.key == "value"
+    assert scenario.properties["key"] == "value"
     assert scenario.creation_date is not None
     assert scenario.is_primary
     assert scenario.cycle == cycle
     assert scenario.tags == set()
     assert scenario.get_simple_label() == scenario.config_id
 
-    with mock.patch("src.taipy.core.get") as get_mck:
+    with mock.patch("taipy.core.get") as get_mck:
 
         class MockOwner:
             label = "owner_label"
@@ -83,7 +102,7 @@ def test_create_scenario_with_task_and_additional_dn_and_sequence():
     dn_2 = PickleDataNode("abc", Scope.SCENARIO)
     task = Task("qux", {}, print, [dn_1])
 
-    scenario = Scenario("quux", set([task]), {}, set([dn_2]), sequences={"acb": {"tasks": [task]}})
+    scenario = Scenario("quux", {task}, {}, {dn_2}, sequences={"acb": {"tasks": [task]}})
     sequence = scenario.sequences["acb"]
     assert scenario.id is not None
     assert scenario.config_id == "quux"
@@ -101,7 +120,7 @@ def test_create_scenario_with_task_and_additional_dn_and_sequence():
 
 def test_create_scenario_invalid_config_id():
     with pytest.raises(InvalidConfigurationId):
-        Scenario("foo bar", [], {})
+        Scenario("foo bar", set(), {})
 
 
 def test_create_scenario_and_add_sequences():
@@ -123,7 +142,7 @@ def test_create_scenario_and_add_sequences():
     task_manager._set(task_1)
     task_manager._set(task_2)
 
-    scenario = Scenario("scenario", set([task_1]), {})
+    scenario = Scenario("scenario", {task_1}, {})
     scenario.sequences = {"sequence_1": {"tasks": [task_1]}, "sequence_2": {"tasks": []}}
     assert scenario.id is not None
     assert scenario.config_id == "scenario"
@@ -140,6 +159,18 @@ def test_create_scenario_and_add_sequences():
     assert scenario.sequence_1 == scenario.sequences["sequence_1"]
     assert scenario.sequence_2 == scenario.sequences["sequence_2"]
     assert scenario.sequences == {"sequence_1": scenario.sequence_1, "sequence_2": scenario.sequence_2}
+
+
+def test_get_set_attribute():
+    dn_cfg = Config.configure_data_node("bar")
+    s_cfg = Config.configure_scenario("foo", additional_data_node_configs=[dn_cfg])
+    scenario = create_scenario(s_cfg)
+
+    scenario.key = "value"
+    assert scenario.key == "value"
+
+    with pytest.raises(AttributeKeyAlreadyExisted):
+        scenario.bar = "KeyAlreadyUsed"
 
 
 def test_create_scenario_overlapping_sequences():
@@ -160,7 +191,7 @@ def test_create_scenario_overlapping_sequences():
     task_manager._set(task_1)
     task_manager._set(task_2)
 
-    scenario = Scenario("scenario", set([task_1, task_2]), {})
+    scenario = Scenario("scenario", {task_1, task_2}, {})
     scenario.add_sequence("sequence_1", [task_1])
     scenario.add_sequence("sequence_2", [task_1, task_2])
     assert scenario.id is not None
@@ -204,7 +235,7 @@ def test_create_scenario_one_additional_dn():
     task_manager._set(task_1)
     task_manager._set(task_2)
 
-    scenario = Scenario("scenario", set(), {}, set([additional_dn_1]))
+    scenario = Scenario("scenario", set(), {}, {additional_dn_1})
     assert scenario.id is not None
     assert scenario.config_id == "scenario"
     assert len(scenario.tasks) == 0
@@ -235,7 +266,7 @@ def test_create_scenario_wth_additional_dns():
     task_manager._set(task_1)
     task_manager._set(task_2)
 
-    scenario = Scenario("scenario", set(), {}, set([additional_dn_1, additional_dn_2]))
+    scenario = Scenario("scenario", set(), {}, {additional_dn_1, additional_dn_2})
     assert scenario.id is not None
     assert scenario.config_id == "scenario"
     assert len(scenario.tasks) == 0
@@ -251,7 +282,7 @@ def test_create_scenario_wth_additional_dns():
         additional_dn_2.config_id: additional_dn_2,
     }
 
-    scenario_1 = Scenario("scenario_1", set([task_1]), {}, set([additional_dn_1]))
+    scenario_1 = Scenario("scenario_1", {task_1}, {}, {additional_dn_1})
     assert scenario_1.id is not None
     assert scenario_1.config_id == "scenario_1"
     assert len(scenario_1.tasks) == 1
@@ -267,7 +298,7 @@ def test_create_scenario_wth_additional_dns():
         additional_dn_1.config_id: additional_dn_1,
     }
 
-    scenario_2 = Scenario("scenario_2", set([task_1, task_2]), {}, set([additional_dn_1, additional_dn_2]))
+    scenario_2 = Scenario("scenario_2", {task_1, task_2}, {}, {additional_dn_1, additional_dn_2})
     assert scenario_2.id is not None
     assert scenario_2.config_id == "scenario_2"
     assert len(scenario_2.tasks) == 2
@@ -293,7 +324,7 @@ def test_raise_sequence_tasks_not_in_scenario(data_node):
     task_2 = Task("task_2", {}, print, input=[data_node])
 
     with pytest.raises(SequenceTaskDoesNotExistInScenario) as err:
-        Scenario("scenario", [], {}, sequences={"sequence": {"tasks": [task_1]}}, scenario_id="SCENARIO_scenario")
+        Scenario("scenario", set(), {}, sequences={"sequence": {"tasks": [task_1]}}, scenario_id="SCENARIO_scenario")
     assert err.value.args == ([task_1.id], "sequence", "SCENARIO_scenario")
 
     with pytest.raises(SequenceTaskDoesNotExistInScenario) as err:
@@ -306,7 +337,7 @@ def test_raise_sequence_tasks_not_in_scenario(data_node):
         )
     assert err.value.args == ([task_2.id], "sequence", "SCENARIO_scenario")
 
-    Scenario("scenario", [task_1], {}, sequences={"sequence": {"tasks": [task_1]}})
+    Scenario("scenario", {task_1}, {}, sequences={"sequence": {"tasks": [task_1]}})
     Scenario(
         "scenario",
         [task_1, task_2],
@@ -315,7 +346,7 @@ def test_raise_sequence_tasks_not_in_scenario(data_node):
     )
 
 
-def test_raise_tasks_not_in_scenario_with_add_sequence_api(data_node):
+def test_adding_sequence_raises_tasks_not_in_scenario(data_node):
     task_1 = Task("task_1", {}, print, output=[data_node])
     task_2 = Task("task_2", {}, print, input=[data_node])
     scenario = Scenario("scenario", [task_1], {})
@@ -345,20 +376,149 @@ def test_raise_tasks_not_in_scenario_with_add_sequence_api(data_node):
     scenario.add_sequence("sequence_6", [task_1, task_2])
 
 
+def test_adding_existing_sequence_raises_exception(data_node):
+    task_1 = Task("task_1", {}, print, output=[data_node])
+    _TaskManagerFactory._build_manager()._set(task_1)
+    task_2 = Task("task_2", {}, print, input=[data_node])
+    _TaskManagerFactory._build_manager()._set(task_2)
+    scenario = Scenario("scenario", tasks={task_1, task_2}, properties={})
+    _ScenarioManagerFactory._build_manager()._set(scenario)
+
+    scenario.add_sequence("sequence_1", [task_1])
+    with pytest.raises(SequenceAlreadyExists):
+        scenario.add_sequence("sequence_1", [task_2])
+
+
+def test_renaming_existing_sequence_raises_exception(data_node):
+    task_1 = Task("task_1", {}, print, output=[data_node])
+    _TaskManagerFactory._build_manager()._set(task_1)
+    task_2 = Task("task_2", {}, print, input=[data_node])
+    _TaskManagerFactory._build_manager()._set(task_2)
+    scenario = Scenario("scenario", {task_1, task_2}, {})
+    _ScenarioManagerFactory._build_manager()._set(scenario)
+
+    scenario.add_sequence("sequence_1", [task_1])
+    scenario.add_sequence("sequence_2", [task_2])
+    with pytest.raises(SequenceAlreadyExists):
+        scenario.rename_sequence("sequence_1", "sequence_2")
+
+
+def test_add_rename_and_remove_sequences():
+    data_node_1 = InMemoryDataNode("foo", Scope.SCENARIO, "s1")
+    data_node_2 = InMemoryDataNode("bar", Scope.SCENARIO, "s2")
+    data_node_3 = InMemoryDataNode("qux", Scope.SCENARIO, "s3")
+    data_node_4 = InMemoryDataNode("quux", Scope.SCENARIO, "s4")
+    data_node_5 = InMemoryDataNode("quuz", Scope.SCENARIO, "s5")
+    task_1 = Task("grault", {}, print, [data_node_1, data_node_2], [data_node_3], TaskId("t1"))
+    task_2 = Task("garply", {}, print, [data_node_3], id=TaskId("t2"))
+    task_3 = Task("waldo", {}, print, [data_node_3], None, id=TaskId("t3"))
+    task_4 = Task("fred", {}, print, [data_node_3], [data_node_4], TaskId("t4"))
+    task_5 = Task("bob", {}, print, [data_node_5], [data_node_3], TaskId("t5"))
+    scenario = Scenario("quest", {task_1, task_2, task_3, task_4, task_5}, {}, [], scenario_id=ScenarioId("s1"))
+
+    sequence_1 = Sequence({"name": "seq_1"}, [task_1], SequenceId(f"SEQUENCE_seq_1_{scenario.id}"))
+    sequence_2 = Sequence({"name": "seq_2"}, [task_1, task_2], SequenceId(f"SEQUENCE_seq_2_{scenario.id}"))
+    new_seq_2 = Sequence({"name": "seq_2"}, [task_1, task_2], SequenceId(f"SEQUENCE_new_seq_2_{scenario.id}"))
+    seq_3 = Sequence({"name": "seq 3"}, [task_1, task_5, task_3], SequenceId(f"SEQUENCE_seqTPSPACE3_{scenario.id}"))
+
+    task_manager = _TaskManagerFactory._build_manager()
+    data_manager = _DataManagerFactory._build_manager()
+    scenario_manager = _ScenarioManagerFactory._build_manager()
+    for dn in [data_node_1, data_node_2, data_node_3, data_node_4, data_node_5]:
+        data_manager._set(dn)
+    for t in [task_1, task_2, task_3, task_4, task_5]:
+        task_manager._set(t)
+    scenario_manager._set(scenario)
+
+    assert scenario.get_inputs() == {data_node_1, data_node_2, data_node_5}
+    assert scenario._get_set_of_tasks() == {task_1, task_2, task_3, task_4, task_5}
+    assert len(scenario.sequences) == 0
+
+    scenario.sequences = {"seq_1": {"tasks": [task_1]}}
+    assert scenario.sequences == {"seq_1": sequence_1}
+
+    scenario.add_sequences({"seq_2": [task_1, task_2]})
+    assert scenario.sequences == {"seq_1": sequence_1, "seq_2": sequence_2}
+
+    scenario.remove_sequences(["seq_1"])
+    assert scenario.sequences == {"seq_2": sequence_2}
+
+    scenario.add_sequences({"seq_1": [task_1], "seq 3": [task_1, task_5, task_3]})
+    assert scenario.sequences == {"seq_2": sequence_2, "seq_1": sequence_1, "seq 3": seq_3}
+
+    scenario.remove_sequences(["seq_2", "seq 3"])
+    assert scenario.sequences == {"seq_1": sequence_1}
+
+    scenario.add_sequence("seq_2", [task_1, task_2])
+    assert scenario.sequences == {"seq_1": sequence_1, "seq_2": sequence_2}
+
+    scenario.add_sequence("seq 3", [task_1.id, task_5.id, task_3.id])
+    assert scenario.sequences == {"seq_1": sequence_1, "seq_2": sequence_2, "seq 3": seq_3}
+
+    scenario.remove_sequence("seq_1")
+    assert scenario.sequences == {"seq_2": sequence_2, "seq 3": seq_3}
+
+    scenario.rename_sequence("seq_2", "new_seq_2")
+    assert scenario.sequences == {"new_seq_2": new_seq_2, "seq 3": seq_3}
+
+
+def test_update_sequence(data_node):
+    task_1 = Task("foo", {}, print, [data_node], [], TaskId("t1"))
+    task_2 = Task("bar", {}, print, [], [data_node], id=TaskId("t2"))
+    scenario = Scenario("baz", {task_1, task_2}, {})
+    scenario.add_sequence("seq_1", [task_1])
+
+    assert len(scenario.sequences) == 1
+    assert scenario.sequences["seq_1"].tasks == {"foo": task_1}
+    assert scenario.sequences["seq_1"].properties["name"] == "seq_1"
+    scenario.update_sequence("seq_1", [task_2], {"new_key": "new_value"}, [])
+    assert len(scenario.sequences) == 1
+    assert scenario.sequences["seq_1"].tasks == {"bar": task_2}
+    assert scenario.sequences["seq_1"].properties["name"] == "seq_1"
+    assert scenario.sequences["seq_1"].properties["new_key"] == "new_value"
+
+
+def test_add_rename_and_remove_sequences_within_context(data_node):
+    task_1 = Task("task_1", {}, print, output=[data_node])
+    task_2 = Task("task_2", {}, print, input=[data_node])
+    _TaskManagerFactory._build_manager()._set(task_1)
+    _TaskManagerFactory._build_manager()._set(task_2)
+    scenario = Scenario(config_id="scenario", tasks={task_1, task_2}, properties={})
+    _ScenarioManagerFactory._build_manager()._set(scenario)
+
+    with scenario as sc:
+        sc.add_sequence("seq_name", [task_1])
+    assert len(scenario.sequences) == 1
+    assert scenario.sequences["seq_name"].tasks == {"task_1": task_1}
+
+    with scenario as sc:
+        sc.update_sequence("seq_name", [task_2])
+    assert len(scenario.sequences) == 1
+    assert scenario.sequences["seq_name"].tasks == {"task_2": task_2}
+
+    with scenario as sc:
+        sc.rename_sequence("seq_name", "seq name")
+    assert scenario.sequences["seq name"].tasks == {"task_2": task_2}
+
+    with scenario as sc:
+        sc.remove_sequence("seq name")
+    assert len(scenario.sequences) == 0
+
+
 def test_add_property_to_scenario():
-    scenario = Scenario("foo", [], {"key": "value"})
+    scenario = Scenario("foo", set(), {"key": "value"})
     assert scenario.properties == {"key": "value"}
-    assert scenario.key == "value"
+    assert scenario.properties["key"] == "value"
 
     scenario.properties["new_key"] = "new_value"
 
     assert scenario.properties == {"key": "value", "new_key": "new_value"}
-    assert scenario.key == "value"
-    assert scenario.new_key == "new_value"
+    assert scenario.properties["key"] == "value"
+    assert scenario.properties["new_key"] == "new_value"
 
 
 def test_add_cycle_to_scenario(cycle):
-    scenario = Scenario("foo", [], {})
+    scenario = Scenario("foo", set(), {})
     assert scenario.cycle is None
     _CycleManagerFactory._build_manager()._set(cycle)
     scenario.cycle = cycle
@@ -367,7 +527,7 @@ def test_add_cycle_to_scenario(cycle):
 
 
 def test_add_and_remove_subscriber():
-    scenario = Scenario("foo", [], {})
+    scenario = Scenario("foo", set(), {})
 
     scenario._add_subscriber(print)
     assert len(scenario.subscribers) == 1
@@ -377,7 +537,7 @@ def test_add_and_remove_subscriber():
 
 
 def test_add_and_remove_tag():
-    scenario = Scenario("foo", [], {})
+    scenario = Scenario("foo", set(), {})
 
     assert len(scenario.tags) == 0
     scenario._add_tag("tag")
@@ -549,6 +709,75 @@ def test_auto_set_and_reload(cycle, current_datetime, task, data_node):
     assert len(scenario_1.tags) == 1
     assert len(scenario_2.tags) == 1
 
+    with scenario_1 as scenario:
+        assert scenario.config_id == "foo"
+        assert len(scenario.tasks) == 1
+        assert len(scenario.sequences) == 1
+        assert scenario.sequences["sequence_1"] == sequence_1
+        assert scenario.tasks[task.config_id] == task
+        assert len(scenario.additional_data_nodes) == 1
+        assert scenario.additional_data_nodes[additional_dn.config_id] == additional_dn
+        assert scenario.creation_date == new_datetime
+        assert scenario.cycle == cycle
+        assert scenario.is_primary
+        assert len(scenario.subscribers) == 0
+        assert len(scenario.tags) == 1
+        assert scenario._is_in_context
+        assert scenario.name == "baz"
+
+        new_datetime_2 = new_datetime + timedelta(5)
+        scenario._config_id = "foo"
+        scenario.tasks = set()
+        scenario.additional_data_nodes = set()
+        scenario.remove_sequences([sequence_1_name])
+        scenario.creation_date = new_datetime_2
+        scenario.cycle = None
+        scenario.is_primary = False
+        scenario.subscribers = [print]
+        scenario.tags = None
+        scenario.name = "qux"
+
+        assert scenario.config_id == "foo"
+        assert len(scenario.sequences) == 1
+        assert scenario.sequences[sequence_1_name] == sequence_1
+        assert len(scenario.tasks) == 1
+        assert scenario.tasks[task.config_id] == task
+        assert len(scenario.additional_data_nodes) == 1
+        assert scenario.additional_data_nodes[additional_dn.config_id] == additional_dn
+        assert scenario.creation_date == new_datetime
+        assert scenario.cycle == cycle
+        assert scenario.is_primary
+        assert len(scenario.subscribers) == 0
+        assert len(scenario.tags) == 1
+        assert scenario._is_in_context
+        assert scenario.name == "baz"
+
+    assert scenario_1.config_id == "foo"
+    assert len(scenario_1.sequences) == 0
+    assert len(scenario_1.tasks) == 0
+    assert len(scenario_1.additional_data_nodes) == 0
+    assert scenario_1.tasks == {}
+    assert scenario_1.additional_data_nodes == {}
+    assert scenario_1.creation_date == new_datetime_2
+    assert scenario_1.cycle is None
+    assert not scenario_1.is_primary
+    assert len(scenario_1.subscribers) == 1
+    assert len(scenario_1.tags) == 0
+    assert not scenario_1._is_in_context
+
+
+def test_auto_set_and_reload_properties():
+    scenario_1 = Scenario(
+        "foo",
+        set(),
+        {"name": "baz"},
+    )
+
+    scenario_manager = _ScenarioManagerFactory._build_manager()
+    scenario_manager._set(scenario_1)
+
+    scenario_2 = scenario_manager._get(scenario_1)
+
     # auto set & reload on properties attribute
     assert scenario_1.properties == {"name": "baz"}
     assert scenario_2.properties == {"name": "baz"}
@@ -601,81 +830,32 @@ def test_auto_set_and_reload(cycle, current_datetime, task, data_node):
     scenario_1.properties.update({"temp_key_3": 1})
     assert scenario_1.properties == {"name": "baz", "qux": 5, "temp_key_3": 1}
     assert scenario_2.properties == {"name": "baz", "qux": 5, "temp_key_3": 1}
-    scenario_1.properties.update(dict())
+    scenario_1.properties.update({})
     assert scenario_1.properties == {"name": "baz", "qux": 5, "temp_key_3": 1}
     assert scenario_2.properties == {"name": "baz", "qux": 5, "temp_key_3": 1}
     scenario_1.properties["temp_key_4"] = 0
     scenario_1.properties["temp_key_5"] = 0
 
     with scenario_1 as scenario:
-        assert scenario.config_id == "foo"
-        assert len(scenario.tasks) == 1
-        assert len(scenario.sequences) == 1
-        assert scenario.sequences["sequence_1"] == sequence_1
-        assert scenario.tasks[task.config_id] == task
-        assert len(scenario.additional_data_nodes) == 1
-        assert scenario.additional_data_nodes[additional_dn.config_id] == additional_dn
-        assert scenario.creation_date == new_datetime
-        assert scenario.cycle == cycle
-        assert scenario.is_primary
-        assert len(scenario.subscribers) == 0
-        assert len(scenario.tags) == 1
-        assert scenario._is_in_context
-        assert scenario.name == "baz"
         assert scenario.properties["qux"] == 5
         assert scenario.properties["temp_key_3"] == 1
         assert scenario.properties["temp_key_4"] == 0
         assert scenario.properties["temp_key_5"] == 0
 
-        new_datetime_2 = new_datetime + timedelta(5)
-        scenario.config_id = "foo"
-        scenario.tasks = set()
-        scenario.additional_data_nodes = set()
-        scenario.remove_sequences([sequence_1_name])
-        scenario.creation_date = new_datetime_2
-        scenario.cycle = None
-        scenario.is_primary = False
-        scenario.subscribers = [print]
-        scenario.tags = None
-        scenario.name = "qux"
         scenario.properties["qux"] = 9
         scenario.properties.pop("temp_key_3")
         scenario.properties.pop("temp_key_4")
         scenario.properties.update({"temp_key_4": 1})
         scenario.properties.update({"temp_key_5": 2})
         scenario.properties.pop("temp_key_5")
-        scenario.properties.update(dict())
+        scenario.properties.update({})
 
-        assert scenario.config_id == "foo"
-        assert len(scenario.sequences) == 1
-        assert scenario.sequences[sequence_1_name] == sequence_1
-        assert len(scenario.tasks) == 1
-        assert scenario.tasks[task.config_id] == task
-        assert len(scenario.additional_data_nodes) == 1
-        assert scenario.additional_data_nodes[additional_dn.config_id] == additional_dn
-        assert scenario.creation_date == new_datetime
-        assert scenario.cycle == cycle
-        assert scenario.is_primary
-        assert len(scenario.subscribers) == 0
-        assert len(scenario.tags) == 1
         assert scenario._is_in_context
-        assert scenario.name == "baz"
         assert scenario.properties["qux"] == 5
         assert scenario.properties["temp_key_3"] == 1
         assert scenario.properties["temp_key_4"] == 0
         assert scenario.properties["temp_key_5"] == 0
 
-    assert scenario_1.config_id == "foo"
-    assert len(scenario_1.sequences) == 0
-    assert len(scenario_1.tasks) == 0
-    assert len(scenario_1.additional_data_nodes) == 0
-    assert scenario_1.tasks == {}
-    assert scenario_1.additional_data_nodes == {}
-    assert scenario_1.creation_date == new_datetime_2
-    assert scenario_1.cycle is None
-    assert not scenario_1.is_primary
-    assert len(scenario_1.subscribers) == 1
-    assert len(scenario_1.tags) == 0
     assert not scenario_1._is_in_context
     assert scenario_1.properties["qux"] == 9
     assert "temp_key_3" not in scenario_1.properties.keys()
@@ -684,43 +864,43 @@ def test_auto_set_and_reload(cycle, current_datetime, task, data_node):
 
 
 def test_is_deletable():
-    with mock.patch("src.taipy.core.scenario._scenario_manager._ScenarioManager._is_deletable") as mock_submit:
-        scenario = Scenario("foo", [], {})
+    with mock.patch("taipy.core.scenario._scenario_manager._ScenarioManager._is_deletable") as mock_submit:
+        scenario = Scenario("foo", set(), {})
         scenario.is_deletable()
         mock_submit.assert_called_once_with(scenario)
 
 
 def test_submit_scenario():
-    with mock.patch("src.taipy.core.scenario._scenario_manager._ScenarioManager._submit") as mock_submit:
-        scenario = Scenario("foo", [], {})
+    with mock.patch("taipy.core.scenario._scenario_manager._ScenarioManager._submit") as mock_submit:
+        scenario = Scenario("foo", set(), {})
         scenario.submit(force=False)
         mock_submit.assert_called_once_with(scenario, None, False, False, None)
 
 
 def test_subscribe_scenario():
-    with mock.patch("src.taipy.core.subscribe_scenario") as mock_subscribe:
-        scenario = Scenario("foo", [], {})
+    with mock.patch("taipy.core.subscribe_scenario") as mock_subscribe:
+        scenario = Scenario("foo", set(), {})
         scenario.subscribe(None)
         mock_subscribe.assert_called_once_with(None, None, scenario)
 
 
 def test_unsubscribe_scenario():
-    with mock.patch("src.taipy.core.unsubscribe_scenario") as mock_unsubscribe:
-        scenario = Scenario("foo", [], {})
+    with mock.patch("taipy.core.unsubscribe_scenario") as mock_unsubscribe:
+        scenario = Scenario("foo", set(), {})
         scenario.unsubscribe(None)
         mock_unsubscribe.assert_called_once_with(None, None, scenario)
 
 
 def test_add_tag_scenario():
-    with mock.patch("src.taipy.core.tag") as mock_add_tag:
-        scenario = Scenario("foo", [], {})
+    with mock.patch("taipy.core.tag") as mock_add_tag:
+        scenario = Scenario("foo", set(), {})
         scenario.add_tag("tag")
         mock_add_tag.assert_called_once_with(scenario, "tag")
 
 
 def test_remove_tag_scenario():
-    with mock.patch("src.taipy.core.untag") as mock_remove_tag:
-        scenario = Scenario("foo", [], {})
+    with mock.patch("taipy.core.untag") as mock_remove_tag:
+        scenario = Scenario("foo", set(), {})
         scenario.remove_tag("tag")
         mock_remove_tag.assert_called_once_with(scenario, "tag")
 
@@ -819,34 +999,55 @@ def test_get_inputs_outputs_intermediate_data_nodes():
 
 
 def test_is_ready_to_run():
-    data_node_1 = PickleDataNode("foo", Scope.SCENARIO, "s1", properties={"default_data": 1})
-    data_node_2 = PickleDataNode("bar", Scope.SCENARIO, "s2", properties={"default_data": 2})
-    data_node_4 = PickleDataNode("qux", Scope.SCENARIO, "s4", properties={"default_data": 4})
-    data_node_5 = PickleDataNode("quux", Scope.SCENARIO, "s5", properties={"default_data": 5})
-    data_node_6 = PickleDataNode("quuz", Scope.SCENARIO, "s6", properties={"default_data": 6})
-    data_node_7 = PickleDataNode("corge", Scope.SCENARIO, "s7", properties={"default_data": 7})
-    data_node_8 = PickleDataNode("d8", Scope.SCENARIO, "s8", properties={"default_data": 8})
-    data_node_9 = PickleDataNode("d9", Scope.SCENARIO, "s9", properties={"default_data": 9})
-    task_1 = Task("grault", {}, print, [data_node_1, data_node_2], [data_node_4], TaskId("t1"))
-    task_2 = Task("garply", {}, print, [data_node_6], [data_node_5], TaskId("t2"))
-    task_3 = Task("waldo", {}, print, [data_node_5, data_node_4], id=TaskId("t3"))
-    task_4 = Task("fred", {}, print, [data_node_4], [data_node_7], TaskId("t4"))
-    task_5 = Task("t5", {}, print, [data_node_8], [data_node_9], TaskId("t5"))
-    task_6 = Task("t6", {}, print, [data_node_7, data_node_9], id=TaskId("t6"))
-    scenario = Scenario("scenario", {task_1, task_2, task_3, task_4, task_5, task_6}, {}, set(), ScenarioId("s1"))
-    # s1 ---      s6 ---> t2 ---> s5
+    task_1_id, task_2_id, task_3_id, task_4_id, task_5_id, task_6_id = (
+        TaskId("TASK_t1"),
+        TaskId("TASK_t2"),
+        TaskId("TASK_t3"),
+        TaskId("TASK_t4"),
+        TaskId("TASK_t5"),
+        TaskId("TASK_t6"),
+    )
+    sc_id = ScenarioId("SCENARIO_s1")
+    data_node_1 = PickleDataNode("foo", Scope.SCENARIO, "d1", parent_ids={task_1_id}, properties={"default_data": 1})
+    data_node_2 = PickleDataNode("bar", Scope.SCENARIO, "d2", parent_ids={task_1_id}, properties={"default_data": 2})
+    data_node_4 = PickleDataNode(
+        "qux", Scope.SCENARIO, "d4", parent_ids={task_1_id, task_4_id, task_3_id}, properties={"default_data": 4}
+    )
+    data_node_5 = PickleDataNode(
+        "quux", Scope.SCENARIO, "d5", parent_ids={task_2_id, task_3_id}, properties={"default_data": 5}
+    )
+    data_node_6 = PickleDataNode("quuz", Scope.SCENARIO, "d6", parent_ids={task_2_id}, properties={"default_data": 6})
+    data_node_7 = PickleDataNode(
+        "corge", Scope.SCENARIO, "d7", parent_ids={task_4_id, task_6_id}, properties={"default_data": 7}
+    )
+    data_node_8 = PickleDataNode("d8", Scope.SCENARIO, "d8", parent_ids={task_5_id}, properties={"default_data": 8})
+    data_node_9 = PickleDataNode(
+        "d9", Scope.SCENARIO, "d9", parent_ids={task_5_id, task_6_id}, properties={"default_data": 9}
+    )
+    task_1 = Task("grault", {}, print, [data_node_1, data_node_2], [data_node_4], id=task_1_id, parent_ids={sc_id})
+    task_2 = Task("garply", {}, print, [data_node_6], [data_node_5], id=task_2_id, parent_ids={sc_id})
+    task_3 = Task("waldo", {}, print, [data_node_5, data_node_4], id=task_3_id, parent_ids={sc_id})
+    task_4 = Task("fred", {}, print, [data_node_4], [data_node_7], id=task_4_id, parent_ids={sc_id})
+    task_5 = Task("t5", {}, print, [data_node_8], [data_node_9], id=task_5_id, parent_ids={sc_id})
+    task_6 = Task("t6", {}, print, [data_node_7, data_node_9], id=task_6_id, parent_ids={sc_id})
+    scenario = Scenario("scenario", {task_1, task_2, task_3, task_4, task_5, task_6}, {}, set(), scenario_id=sc_id)
+    # d1 ---      d6 ---> t2 ---> d5
     #       |                     |
     #       |---> t1 ---|      -----> t3
     #       |           |      |
-    # s2 ---             ---> s4 ---> t4 ---> s7 ---> t6
+    # d2 ---             ---> d4 ---> t4 ---> d7 ---> t6
     #                                              |
-    # s8 -------> t5 -------> s9 ------------------
+    # d8 -------> t5 -------> d9 ------------------
     assert scenario.get_inputs() == {data_node_1, data_node_2, data_node_6, data_node_8}
 
     data_manager = _DataManagerFactory._build_manager()
     data_manager._delete_all()
     for dn in [data_node_1, data_node_2, data_node_4, data_node_5, data_node_6, data_node_7, data_node_8, data_node_9]:
         data_manager._set(dn)
+    task_manager = _TaskManagerFactory._build_manager()
+    for task in [task_1, task_2, task_3, task_4, task_5, task_6]:
+        task_manager._set(task)
+    _ScenarioManagerFactory._build_manager()._set(scenario)
 
     assert scenario.is_ready_to_run()
 
@@ -980,7 +1181,7 @@ def test_get_sorted_tasks():
                 return False
             else:
                 index_task_b = tasks_b.index(task_a)
-                if any([isinstance(task_b, list) for task_b in tasks_b[i : index_task_b + 1]]):
+                if any(isinstance(task_b, list) for task_b in tasks_b[i : index_task_b + 1]):
                     return False
         return True
 
@@ -1207,65 +1408,6 @@ def test_get_sorted_tasks():
     _assert_equal(scenario_8._get_sorted_tasks(), [[task_5, task_2, task_1], [task_3, task_4]])
 
 
-def test_add_and_remove_sequences():
-    data_node_1 = InMemoryDataNode("foo", Scope.SCENARIO, "s1")
-    data_node_2 = InMemoryDataNode("bar", Scope.SCENARIO, "s2")
-    data_node_3 = InMemoryDataNode("qux", Scope.SCENARIO, "s3")
-    data_node_4 = InMemoryDataNode("quux", Scope.SCENARIO, "s4")
-    data_node_5 = InMemoryDataNode("quuz", Scope.SCENARIO, "s5")
-    task_1 = Task(
-        "grault",
-        {},
-        print,
-        [data_node_1, data_node_2],
-        [data_node_3],
-        TaskId("t1"),
-    )
-    task_2 = Task("garply", {}, print, [data_node_3], id=TaskId("t2"))
-    task_3 = Task("waldo", {}, print, [data_node_3], None, id=TaskId("t3"))
-    task_4 = Task("fred", {}, print, [data_node_3], [data_node_4], TaskId("t4"))
-    task_5 = Task("bob", {}, print, [data_node_5], [data_node_3], TaskId("t5"))
-    scenario_1 = Scenario("quest", [task_1, task_2, task_3, task_4, task_5], {}, [], scenario_id=ScenarioId("s1"))
-
-    sequence_1 = Sequence({"name": "sequence_1"}, [task_1], SequenceId(f"SEQUENCE_sequence_1_{scenario_1.id}"))
-    sequence_2 = Sequence({"name": "sequence_2"}, [task_1, task_2], SequenceId(f"SEQUENCE_sequence_2_{scenario_1.id}"))
-    sequence_3 = Sequence(
-        {"name": "sequence_3"}, [task_1, task_5, task_3], SequenceId(f"SEQUENCE_sequence_3_{scenario_1.id}")
-    )
-
-    task_manager = _TaskManagerFactory._build_manager()
-    data_manager = _DataManagerFactory._build_manager()
-    scenario_manager = _ScenarioManagerFactory._build_manager()
-    for dn in [data_node_1, data_node_2, data_node_3, data_node_4, data_node_5]:
-        data_manager._set(dn)
-    for t in [task_1, task_2, task_3, task_4, task_5]:
-        task_manager._set(t)
-    scenario_manager._set(scenario_1)
-
-    assert scenario_1.get_inputs() == {data_node_1, data_node_2, data_node_5}
-    assert scenario_1._get_set_of_tasks() == {task_1, task_2, task_3, task_4, task_5}
-    assert len(scenario_1.sequences) == 0
-
-    scenario_1.sequences = {"sequence_1": {"tasks": [task_1]}}
-    assert scenario_1.sequences == {"sequence_1": sequence_1}
-
-    scenario_1.add_sequences({"sequence_2": [task_1, task_2]})
-    assert scenario_1.sequences == {"sequence_1": sequence_1, "sequence_2": sequence_2}
-
-    scenario_1.remove_sequences(["sequence_1"])
-    assert scenario_1.sequences == {"sequence_2": sequence_2}
-
-    scenario_1.add_sequences({"sequence_1": [task_1], "sequence_3": [task_1, task_5, task_3]})
-    assert scenario_1.sequences == {
-        "sequence_2": sequence_2,
-        "sequence_1": sequence_1,
-        "sequence_3": sequence_3,
-    }
-
-    scenario_1.remove_sequences(["sequence_2", "sequence_3"])
-    assert scenario_1.sequences == {"sequence_1": sequence_1}
-
-
 def test_check_consistency():
     data_node_1 = InMemoryDataNode("foo", Scope.SCENARIO, "s1")
     data_node_2 = InMemoryDataNode("bar", Scope.SCENARIO, "s2")
@@ -1396,3 +1538,25 @@ def test_check_consistency():
     task_5 = Task("bob", {}, print, [data_node_5], [data_node_3], TaskId("t5"))
     scenario_9 = Scenario("scenario_9", [task_1, task_2, task_3, task_4, task_5], {}, [], scenario_id=ScenarioId("s8"))
     assert scenario_9._is_consistent()
+
+
+def test_check_inconsistency(caplog):
+    class FakeDataNode:
+        config_id = "config_id_of_a_fake_dn"
+
+    data_node_1 = InMemoryDataNode("foo", Scope.SCENARIO, "s1")
+    data_node_2 = InMemoryDataNode("bar", Scope.SCENARIO, "s2")
+
+    task_1 = Task("grault", {}, print, [data_node_1, data_node_2], [FakeDataNode()], TaskId("t1"))
+    task_2 = Task("garply", {}, print, [data_node_1], [data_node_2], id=TaskId("t2"))
+    scenario_1 = Scenario("scenario_1", [task_1, task_2], {}, [], scenario_id=ScenarioId("s1"))
+    assert not scenario_1._is_consistent()
+    assert (
+        'Invalid edge detected in scenario "s1": left node Task "grault" and right node FakeDataNode'
+        " must connect a Task and a DataNode" in caplog.text
+    )
+
+    task_3 = Task("waldo", {}, print, [data_node_2], [data_node_1], id=TaskId("t3"))
+    scenario_2 = Scenario("scenario_2", [task_2, task_3], {}, [], scenario_id=ScenarioId("s2"))
+    assert not scenario_2._is_consistent()
+    assert 'The DAG of scenario "s2" is not a directed acyclic graph' in caplog.text

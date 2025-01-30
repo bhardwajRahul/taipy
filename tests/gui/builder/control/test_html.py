@@ -1,4 +1,4 @@
-# Copyright 2023 Avaiga Private Limited
+# Copyright 2021-2025 Avaiga Private Limited
 #
 # Licensed under the Apache License, Version 2.0 (the "License"); you may not use this file except in compliance with
 # the License. You may obtain a copy of the License at
@@ -20,12 +20,14 @@ def test_html_builder(gui: Gui, test_client, helpers):
         with tgb.html("p", "This is a paragraph.", style="color:green;"):
             tgb.html("a", "a text", href="https://www.w3schools.com", target="_blank")
             tgb.html("br")
-            tgb.html("b", "This is bold text inside the paragrah.")
+            tgb.html("BR")
+            tgb.html(None, "This is text")
+            tgb.html("b", "This is bold text inside the paragraph.")
     expected_list = [
         '<h1 style="color:Tomato;">This is a header',
         '<p style="color:green;">This is a paragraph.',
         '<a href="https://www.w3schools.com" target="_blank">a text',
         "<br>",
-        "<b>This is bold text inside the paragrah.",
+        "<b>This is bold text inside the paragraph.",
     ]
     helpers.test_control_builder(gui, page, expected_list)

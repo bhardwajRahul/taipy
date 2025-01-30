@@ -1,5 +1,5 @@
 /*
- * Copyright 2023 Avaiga Private Limited
+ * Copyright 2021-2025 Avaiga Private Limited
  *
  * Licensed under the Apache License, Version 2.0 (the "License"); you may not use this file except in compliance with
  * the License. You may obtain a copy of the License at
@@ -23,10 +23,9 @@ import React, {
     CSSProperties,
 } from "react";
 import Box from "@mui/material/Box";
-import { TreeView as MuiTreeView } from "@mui/x-tree-view/TreeView";
-import ExpandMoreIcon from "@mui/icons-material/ExpandMore";
+import { SimpleTreeView as MuiTreeView } from "@mui/x-tree-view/SimpleTreeView";
 import ChevronRightIcon from "@mui/icons-material/ChevronRight";
-import { TreeItem, TreeItemContentProps, useTreeItem, TreeItemProps } from "@mui/x-tree-view/TreeItem";
+import { TreeItem, TreeItemContentProps, useTreeItemState, TreeItemProps } from "@mui/x-tree-view/TreeItem";
 import Paper from "@mui/material/Paper";
 import TextField from "@mui/material/TextField";
 import Tooltip from "@mui/material/Tooltip";
@@ -44,14 +43,17 @@ import {
 import { LovItem } from "../../utils/lov";
 import { getUpdateVar } from "./utils";
 import { Icon } from "../../utils/icon";
+import { getComponentClassName } from "./TaipyStyle";
+
+const treeSlots = { expandIcon: ChevronRightIcon };
 
 const CustomContent = forwardRef(function CustomContent(props: TreeItemContentProps, ref) {
     // need a display name
-    const { classes, className, label, nodeId, icon: iconProp, expansionIcon, displayIcon } = props;
+    const { classes, className, label, itemId, icon: iconProp, expansionIcon, displayIcon } = props;
     const { allowSelection, lovIcon, height } = props as unknown as CustomTreeProps;
 
     const { disabled, expanded, selected, focused, handleExpansion, handleSelection, preventSelection } =
-        useTreeItem(nodeId);
+        useTreeItemState(itemId);
 
     const icon = iconProp || expansionIcon || displayIcon;
 
@@ -118,7 +120,7 @@ const renderTree = (
         return (
             <CustomTreeItem
                 key={li.id}
-                nodeId={li.id}
+                itemId={li.id}
                 label={typeof li.item === "string" ? li.item : "undefined item"}
                 disabled={!active}
                 allowSelection={selectLeafsOnly ? !children || children.length == 0 : true}
@@ -227,7 +229,7 @@ const TreeView = (props: TreeViewProps) => {
             let parsedValue;
             try {
                 parsedValue = JSON.parse(defaultValue);
-            } catch (e) {
+            } catch {
                 parsedValue = defaultValue;
             }
             setSelectedValue(Array.isArray(parsedValue) ? parsedValue : [parsedValue]);
@@ -235,8 +237,8 @@ const TreeView = (props: TreeViewProps) => {
     }, [defaultValue, value, multiple]);
 
     const clickHandler = useCallback(
-        (event: SyntheticEvent, nodeIds: string[] | string) => {
-            const ids = Array.isArray(nodeIds) ? nodeIds : [nodeIds];
+        (event: SyntheticEvent, nodeIds: string[] | string | null) => {
+            const ids = nodeIds === null ? [] : Array.isArray(nodeIds) ? nodeIds : [nodeIds];
             setSelectedValue(ids);
             updateVarName &&
                 dispatch(
@@ -279,10 +281,13 @@ const TreeView = (props: TreeViewProps) => {
         [oneExpanded, refreshExpanded, lovList, propagate, updateVars, dispatch, props.onChange, module]
     );
 
-    const treeProps = useMemo(() => ({ multiSelect: multiple, selected: selectedValue }), [multiple, selectedValue]);
+    const treeProps = useMemo(
+        () => ({ multiSelect: multiple, selectedItems: selectedValue }),
+        [multiple, selectedValue]
+    );
 
     return (
-        <Box id={id} sx={boxSx} className={className}>
+        <Box id={id} sx={boxSx} className={`${className} ${getComponentClassName(props.children)}`}>
             <Tooltip title={hover || ""}>
                 <Paper sx={paperSx}>
                     <Box>
@@ -299,18 +304,18 @@ const TreeView = (props: TreeViewProps) => {
                     </Box>
                     <MuiTreeView
                         aria-label="tree"
-                        defaultCollapseIcon={<ExpandMoreIcon />}
-                        defaultExpandIcon={<ChevronRightIcon />}
+                        slots={treeSlots}
                         sx={treeSx}
-                        onNodeSelect={clickHandler}
-                        expanded={expandedNodes}
-                        onNodeToggle={handleNodeToggle}
+                        onSelectedItemsChange={clickHandler}
+                        expandedItems={expandedNodes}
+                        onExpandedItemsChange={handleNodeToggle}
                         {...treeProps}
                     >
                         {renderTree(lovList, !!active, searchValue, selectLeafsOnly, rowHeight)}
                     </MuiTreeView>
                 </Paper>
             </Tooltip>
+            {props.children}
         </Box>
     );
 };

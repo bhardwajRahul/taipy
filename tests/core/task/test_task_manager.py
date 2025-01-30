@@ -1,4 +1,4 @@
-# Copyright 2023 Avaiga Private Limited
+# Copyright 2021-2025 Avaiga Private Limited
 #
 # Licensed under the Apache License, Version 2.0 (the "License"); you may not use this file except in compliance with
 # the License. You may obtain a copy of the License at
@@ -14,18 +14,18 @@ from unittest import mock
 
 import pytest
 
-from src.taipy.core import taipy
-from src.taipy.core._orchestrator._orchestrator import _Orchestrator
-from src.taipy.core._version._version_manager import _VersionManager
-from src.taipy.core.data._data_manager import _DataManager
-from src.taipy.core.data.in_memory import InMemoryDataNode
-from src.taipy.core.exceptions.exceptions import ModelNotFound, NonExistingTask
-from src.taipy.core.task._task_manager import _TaskManager
-from src.taipy.core.task._task_manager_factory import _TaskManagerFactory
-from src.taipy.core.task.task import Task
-from src.taipy.core.task.task_id import TaskId
-from taipy.config.common.scope import Scope
-from taipy.config.config import Config
+from taipy.common.config import Config
+from taipy.common.config.common.scope import Scope
+from taipy.core import taipy
+from taipy.core._orchestrator._orchestrator import _Orchestrator
+from taipy.core._version._version_manager import _VersionManager
+from taipy.core.data._data_manager import _DataManager
+from taipy.core.data.in_memory import InMemoryDataNode
+from taipy.core.exceptions.exceptions import ModelNotFound, NonExistingTask
+from taipy.core.task._task_manager import _TaskManager
+from taipy.core.task._task_manager_factory import _TaskManagerFactory
+from taipy.core.task.task import Task
+from taipy.core.task.task_id import TaskId
 
 
 def test_create_and_save():
@@ -82,7 +82,7 @@ def test_assign_task_as_parent_of_datanode():
 
     dns = {dn.config_id: dn for dn in _DataManager._get_all()}
     assert dns["dn_1"].parent_ids == {tasks[0].id}
-    assert dns["dn_2"].parent_ids == set([tasks[0].id, tasks[1].id])
+    assert dns["dn_2"].parent_ids == {tasks[0].id, tasks[1].id}
     assert dns["dn_3"].parent_ids == {tasks[1].id}
 
 
@@ -308,6 +308,10 @@ def test_is_submittable():
     task_config = Config.configure_task("task", print, [dn_config])
     task = _TaskManager._bulk_get_or_create([task_config])[0]
 
+    rc = _TaskManager._is_submittable("some_task")
+    assert not rc
+    assert "Entity some_task does not exist in the repository" in rc.reasons
+
     assert len(_TaskManager._get_all()) == 1
     assert _TaskManager._is_submittable(task)
     assert _TaskManager._is_submittable(task.id)
@@ -344,7 +348,7 @@ def test_submit_task():
             self.submit_ids.append(submit_id)
             return None
 
-    with mock.patch("src.taipy.core.task._task_manager._TaskManager._orchestrator", new=MockOrchestrator):
+    with mock.patch("taipy.core.task._task_manager._TaskManager._orchestrator", new=MockOrchestrator):
         # Task does not exist, we expect an exception
         with pytest.raises(NonExistingTask):
             _TaskManager._submit(task_1)
@@ -367,7 +371,7 @@ def test_submit_task():
 
 
 def my_print(a, b):
-    print(a + b)
+    print(a + b)  # noqa: T201
 
 
 def test_submit_task_with_input_dn_wrong_file_path(caplog):
@@ -391,8 +395,8 @@ def test_submit_task_with_input_dn_wrong_file_path(caplog):
         f"path : {input_dn.path} "
         for input_dn in task.output.values()
     ]
-    assert all([expected_output in stdout for expected_output in expected_outputs])
-    assert all([expected_output not in stdout for expected_output in not_expected_outputs])
+    assert all(expected_output in stdout for expected_output in expected_outputs)
+    assert all(expected_output not in stdout for expected_output in not_expected_outputs)
 
 
 def test_submit_task_with_one_input_dn_wrong_file_path(caplog):
@@ -416,8 +420,8 @@ def test_submit_task_with_one_input_dn_wrong_file_path(caplog):
         f"path : {input_dn.path} "
         for input_dn in [task.input["pickle_file_path"], task.output["wrong_parquet_file_path"]]
     ]
-    assert all([expected_output in stdout for expected_output in expected_outputs])
-    assert all([expected_output not in stdout for expected_output in not_expected_outputs])
+    assert all(expected_output in stdout for expected_output in expected_outputs)
+    assert all(expected_output not in stdout for expected_output in not_expected_outputs)
 
 
 def test_get_tasks_by_config_id():

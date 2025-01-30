@@ -1,4 +1,4 @@
-# Copyright 2023 Avaiga Private Limited
+# Copyright 2021-2025 Avaiga Private Limited
 #
 # Licensed under the Apache License, Version 2.0 (the "License"); you may not use this file except in compliance with
 # the License. You may obtain a copy of the License at
@@ -9,30 +9,33 @@
 # an "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied. See the License for the
 # specific language governing permissions and limitations under the License.
 
-from datetime import timedelta
+from datetime import datetime, timedelta
 from time import sleep
-from typing import Union
+from typing import Union, cast
 from unittest import mock
 from unittest.mock import MagicMock
 
+import freezegun
 import pytest
 
-from src.taipy.core import JobId, Sequence, SequenceId, TaskId
-from src.taipy.core._orchestrator._dispatcher._development_job_dispatcher import _DevelopmentJobDispatcher
-from src.taipy.core._orchestrator._dispatcher._standalone_job_dispatcher import _StandaloneJobDispatcher
-from src.taipy.core._orchestrator._orchestrator_factory import _OrchestratorFactory
-from src.taipy.core.config.job_config import JobConfig
-from src.taipy.core.data.in_memory import InMemoryDataNode
-from src.taipy.core.job._job_manager import _JobManager
-from src.taipy.core.job.job import Job
-from src.taipy.core.job.status import Status
-from src.taipy.core.scenario.scenario import Scenario
-from src.taipy.core.submission._submission_manager_factory import _SubmissionManagerFactory
-from src.taipy.core.submission.submission import Submission
-from src.taipy.core.task._task_manager import _TaskManager
-from src.taipy.core.task.task import Task
-from taipy.config.common.scope import Scope
-from taipy.config.config import Config
+from taipy.common.config import Config
+from taipy.common.config.common.scope import Scope
+from taipy.core import JobId, TaskId
+from taipy.core._orchestrator._abstract_orchestrator import _AbstractOrchestrator
+from taipy.core._orchestrator._dispatcher._development_job_dispatcher import _DevelopmentJobDispatcher
+from taipy.core._orchestrator._dispatcher._standalone_job_dispatcher import _StandaloneJobDispatcher
+from taipy.core._orchestrator._orchestrator_factory import _OrchestratorFactory
+from taipy.core.config.job_config import JobConfig
+from taipy.core.data.in_memory import InMemoryDataNode
+from taipy.core.job._job_manager import _JobManager
+from taipy.core.job._job_manager_factory import _JobManagerFactory
+from taipy.core.job.job import Job
+from taipy.core.job.status import Status
+from taipy.core.scenario.scenario import Scenario
+from taipy.core.submission._submission_manager_factory import _SubmissionManagerFactory
+from taipy.core.task._task_manager import _TaskManager
+from taipy.core.task._task_manager_factory import _TaskManagerFactory
+from taipy.core.task.task import Task
 
 
 @pytest.fixture
@@ -70,9 +73,12 @@ def job(task, job_id):
 @pytest.fixture
 def replace_in_memory_write_fct():
     default_write = InMemoryDataNode.write
+    default__write = InMemoryDataNode._write
     InMemoryDataNode.write = _error
+    InMemoryDataNode._write = _error
     yield
     InMemoryDataNode.write = default_write
+    InMemoryDataNode._write = default__write
 
 
 def _foo():
@@ -83,8 +89,24 @@ def _error():
     raise RuntimeError("Something bad has happened")
 
 
+def test_job_equals(job):
+    _TaskManagerFactory._build_manager()._set(job.task)
+    job_manager = _JobManagerFactory()._build_manager()
+
+    job_id = job.id
+    job_manager._set(job)
+
+    # To test if instance is same type
+    task = Task("task", {}, print, [], [], job_id)
+
+    job_2 = job_manager._get(job_id)
+    assert job == job_2
+    assert job != job_id
+    assert job != task
+
+
 def test_create_job(scenario, task, job):
-    from src.taipy.core.scenario._scenario_manager_factory import _ScenarioManagerFactory
+    from taipy.core.scenario._scenario_manager_factory import _ScenarioManagerFactory
 
     _ScenarioManagerFactory._build_manager()._set(scenario)
 
@@ -94,7 +116,7 @@ def test_create_job(scenario, task, job):
     assert job.submit_id is not None
     assert job.submit_entity_id == "SCENARIO_scenario_config"
     assert job.submit_entity == scenario
-    with mock.patch("src.taipy.core.get") as get_mck:
+    with mock.patch("taipy.core.get") as get_mck:
         get_mck.return_value = task
         assert job.get_label() == "name > " + job.id
     assert job.get_simple_label() == job.id
@@ -119,7 +141,7 @@ def test_comparison(task):
 
 
 def test_status_job(task):
-    submission = _SubmissionManagerFactory._build_manager()._create(task.id, task._ID_PREFIX)
+    submission = _SubmissionManagerFactory._build_manager()._create(task.id, task._ID_PREFIX, task.config_id)
     job = Job("job_id", task, submission.id, "SCENARIO_scenario_config")
     submission.jobs = [job]
 
@@ -148,9 +170,25 @@ def test_status_job(task):
     assert job.is_skipped()
 
 
+def test_stacktrace_job(task):
+    submission = _SubmissionManagerFactory._build_manager()._create(task.id, task._ID_PREFIX, task.config_id)
+    job = Job("job_id", task, submission.id, "SCENARIO_scenario_config")
+
+    fake_stacktraces = [
+        """Traceback (most recent call last):
+File "<stdin>", line 1, in <module>
+ZeroDivisionError: division by zero""",
+        "Another error",
+        "yet\nAnother\nError",
+    ]
+
+    job.stacktrace = fake_stacktraces
+    assert job.stacktrace == fake_stacktraces
+
+
 def test_notification_job(task):
     subscribe = MagicMock()
-    submission = _SubmissionManagerFactory._build_manager()._create(task.id, task._ID_PREFIX)
+    submission = _SubmissionManagerFactory._build_manager()._create(task.id, task._ID_PREFIX, task.config_id)
     job = Job("job_id", task, submission.id, "SCENARIO_scenario_config")
     submission.jobs = [job]
 
@@ -170,7 +208,7 @@ def test_notification_job(task):
 
 def test_handle_exception_in_user_function(task_id, job_id):
     task = Task(config_id="name", properties={}, input=[], function=_error, output=[], id=task_id)
-    submission = _SubmissionManagerFactory._build_manager()._create(task.id, task._ID_PREFIX)
+    submission = _SubmissionManagerFactory._build_manager()._create(task.id, task._ID_PREFIX, task.config_id)
     job = Job(job_id, task, submission.id, "scenario_entity_id")
     submission.jobs = [job]
 
@@ -184,7 +222,7 @@ def test_handle_exception_in_user_function(task_id, job_id):
 def test_handle_exception_in_input_data_node(task_id, job_id):
     data_node = InMemoryDataNode("data_node", scope=Scope.SCENARIO)
     task = Task(config_id="name", properties={}, input=[data_node], function=print, output=[], id=task_id)
-    submission = _SubmissionManagerFactory._build_manager()._create(task.id, task._ID_PREFIX)
+    submission = _SubmissionManagerFactory._build_manager()._create(task.id, task._ID_PREFIX, task.config_id)
     job = Job(job_id, task, submission.id, "scenario_entity_id")
     submission.jobs = [job]
 
@@ -198,7 +236,7 @@ def test_handle_exception_in_input_data_node(task_id, job_id):
 def test_handle_exception_in_ouptut_data_node(replace_in_memory_write_fct, task_id, job_id):
     data_node = InMemoryDataNode("data_node", scope=Scope.SCENARIO)
     task = Task(config_id="name", properties={}, input=[], function=_foo, output=[data_node], id=task_id)
-    submission = _SubmissionManagerFactory._build_manager()._create(task.id, task._ID_PREFIX)
+    submission = _SubmissionManagerFactory._build_manager()._create(task.id, task._ID_PREFIX, task.config_id)
     job = Job(job_id, task, submission.id, "scenario_entity_id")
     submission.jobs = [job]
 
@@ -213,7 +251,7 @@ def test_handle_exception_in_ouptut_data_node(replace_in_memory_write_fct, task_
 def test_auto_set_and_reload(current_datetime, job_id):
     task_1 = Task(config_id="name_1", properties={}, function=_foo, id=TaskId("task_1"))
     task_2 = Task(config_id="name_2", properties={}, function=_foo, id=TaskId("task_2"))
-    submission = _SubmissionManagerFactory._build_manager()._create(task_1.id, task_1._ID_PREFIX)
+    submission = _SubmissionManagerFactory._build_manager()._create(task_1.id, task_1._ID_PREFIX, task_1.config_id)
     job_1 = Job(job_id, task_1, submission.id, "scenario_entity_id")
     submission.jobs = [job_1]
 
@@ -289,22 +327,81 @@ def test_auto_set_and_reload(current_datetime, job_id):
     assert not job_1._is_in_context
 
 
-def _dispatch(task: Task, job: Job, mode=JobConfig._DEVELOPMENT_MODE):
-    Config.configure_job_executions(mode=mode)
-    _OrchestratorFactory._build_dispatcher()
-    _TaskManager._set(task)
-    _JobManager._set(job)
-    dispatcher: Union[_StandaloneJobDispatcher, _DevelopmentJobDispatcher] = _StandaloneJobDispatcher(
-        _OrchestratorFactory._orchestrator
-    )
-    if mode == JobConfig._DEVELOPMENT_MODE:
-        dispatcher = _DevelopmentJobDispatcher(_OrchestratorFactory._orchestrator)
-    dispatcher._dispatch(job)
+def test_status_records(job_id):
+    task_1 = Task(config_id="name_1", properties={}, function=_foo, id=TaskId("task_1"))
+    submission = _SubmissionManagerFactory._build_manager()._create(task_1.id, task_1._ID_PREFIX, task_1.config_id)
+    with freezegun.freeze_time("2024-09-25 13:30:30"):
+        job_1 = Job(job_id, task_1, submission.id, "scenario_entity_id")
+    submission.jobs = [job_1]
+
+    _TaskManager._set(task_1)
+    _JobManager._set(job_1)
+
+    assert job_1._status_change_records == {"SUBMITTED": datetime(2024, 9, 25, 13, 30, 30)}
+    assert job_1.submitted_at == datetime(2024, 9, 25, 13, 30, 30)
+    assert job_1.execution_duration is None
+
+    with freezegun.freeze_time("2024-09-25 13:35:30"):
+        job_1.blocked()
+    assert job_1._status_change_records == {
+        "SUBMITTED": datetime(2024, 9, 25, 13, 30, 30),
+        "BLOCKED": datetime(2024, 9, 25, 13, 35, 30),
+    }
+    assert job_1.execution_duration is None
+    with freezegun.freeze_time("2024-09-25 13:36:00"):
+        assert job_1.blocked_duration == 30  # = 13:36:00 - 13:35:30
+
+    with freezegun.freeze_time("2024-09-25 13:40:30"):
+        job_1.pending()
+    assert job_1._status_change_records == {
+        "SUBMITTED": datetime(2024, 9, 25, 13, 30, 30),
+        "BLOCKED": datetime(2024, 9, 25, 13, 35, 30),
+        "PENDING": datetime(2024, 9, 25, 13, 40, 30),
+    }
+    assert job_1.execution_duration is None
+    with freezegun.freeze_time("2024-09-25 13:41:00"):
+        assert job_1.pending_duration == 30  # = 13:41:00 - 13:40:30
+
+    with freezegun.freeze_time("2024-09-25 13:50:30"):
+        job_1.running()
+    assert job_1._status_change_records == {
+        "SUBMITTED": datetime(2024, 9, 25, 13, 30, 30),
+        "BLOCKED": datetime(2024, 9, 25, 13, 35, 30),
+        "PENDING": datetime(2024, 9, 25, 13, 40, 30),
+        "RUNNING": datetime(2024, 9, 25, 13, 50, 30),
+    }
+    assert job_1.run_at == datetime(2024, 9, 25, 13, 50, 30)
+    assert job_1.blocked_duration == 300  # = 13:40:30 - 13:35:30
+    assert job_1.pending_duration == 600  # = 13:50:30 - 13:40:30
+    assert job_1.execution_duration > 0
+
+    with freezegun.freeze_time("2024-09-25 13:56:35"):
+        job_1.completed()
+    assert job_1._status_change_records == {
+        "SUBMITTED": datetime(2024, 9, 25, 13, 30, 30),
+        "BLOCKED": datetime(2024, 9, 25, 13, 35, 30),
+        "PENDING": datetime(2024, 9, 25, 13, 40, 30),
+        "RUNNING": datetime(2024, 9, 25, 13, 50, 30),
+        "COMPLETED": datetime(2024, 9, 25, 13, 56, 35),
+    }
+    assert job_1.execution_duration == 365  # = 13:56:35 - 13:50:30
 
 
 def test_is_deletable():
-    with mock.patch("src.taipy.core.job._job_manager._JobManager._is_deletable") as mock_submit:
+    with mock.patch("taipy.core.job._job_manager._JobManager._is_deletable") as mock_submit:
         task = Task(config_id="name_1", properties={}, function=_foo, id=TaskId("task_1"))
         job = Job(job_id, task, "submit_id_1", "scenario_entity_id")
         job.is_deletable()
         mock_submit.assert_called_once_with(job)
+
+
+def _dispatch(task: Task, job: Job, mode=JobConfig._DEVELOPMENT_MODE):
+    Config.configure_job_executions(mode=mode)
+    _TaskManager._set(task)
+    _JobManager._set(job)
+    dispatcher: Union[_StandaloneJobDispatcher, _DevelopmentJobDispatcher] = _StandaloneJobDispatcher(
+        cast(_AbstractOrchestrator, _OrchestratorFactory._orchestrator)
+    )
+    if mode == JobConfig._DEVELOPMENT_MODE:
+        dispatcher = _DevelopmentJobDispatcher(cast(_AbstractOrchestrator, _OrchestratorFactory._orchestrator))
+    dispatcher._dispatch(job)

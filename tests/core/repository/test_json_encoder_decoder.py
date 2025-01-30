@@ -1,4 +1,4 @@
-# Copyright 2023 Avaiga Private Limited
+# Copyright 2021-2025 Avaiga Private Limited
 #
 # Licensed under the Apache License, Version 2.0 (the "License"); you may not use this file except in compliance with
 # the License. You may obtain a copy of the License at
@@ -15,8 +15,8 @@ from datetime import datetime, timedelta
 
 import pytest
 
-from src.taipy.core._repository._decoder import _Decoder
-from src.taipy.core._repository._encoder import _Encoder
+from taipy.core._repository._decoder import _Decoder
+from taipy.core._repository._encoder import _Encoder
 
 
 @pytest.fixture(scope="function", autouse=True)

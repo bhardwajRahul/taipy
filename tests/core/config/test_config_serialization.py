@@ -1,4 +1,4 @@
-# Copyright 2023 Avaiga Private Limited
+# Copyright 2021-2025 Avaiga Private Limited
 #
 # Licensed under the Apache License, Version 2.0 (the "License"); you may not use this file except in compliance with
 # the License. You may obtain a copy of the License at
@@ -12,11 +12,11 @@
 import datetime
 import json
 
-from src.taipy.core.config import CoreSection, DataNodeConfig, JobConfig, MigrationConfig, ScenarioConfig, TaskConfig
-from taipy.config import Config
-from taipy.config._serializer._json_serializer import _JsonSerializer
-from taipy.config.common.frequency import Frequency
-from taipy.config.common.scope import Scope
+from taipy.common.config import Config
+from taipy.common.config._serializer._json_serializer import _JsonSerializer
+from taipy.common.config.common.frequency import Frequency
+from taipy.common.config.common.scope import Scope
+from taipy.core.config import CoreSection, DataNodeConfig, JobConfig, ScenarioConfig, TaskConfig
 from tests.core.utils.named_temporary_file import NamedTemporaryFile
 
 
@@ -35,7 +35,6 @@ def compare_function(*data_node_results):
         comparison_result[current_result_index] = {}
         next_result_index = 0
         for next_result in data_node_results:
-            print(f"comparing result {current_result_index} with result {next_result_index}")
             comparison_result[current_result_index][next_result_index] = next_result - current_result
             next_result_index += 1
         current_result_index += 1
@@ -58,7 +57,7 @@ class CustomEncoder(json.JSONEncoder):
 
 class CustomDecoder(json.JSONDecoder):
     def __init__(self, *args, **kwargs):
-        json.JSONDecoder.__init__(self, object_hook=self.object_hook, *args, **kwargs)
+        json.JSONDecoder.__init__(self, *args, **kwargs, object_hook=self.object_hook)
 
     def object_hook(self, source):
         if source.get("__type__") == "Datetime":
@@ -103,8 +102,6 @@ def config_test_scenario():
     )
     test_scenario_cfg.add_sequences({"sequence1": [test_task_cfg]})
 
-    Config.add_migration_function("1.0", test_csv_dn_cfg, migrate_csv_path)
-
     return test_scenario_cfg
 
 
@@ -114,11 +111,11 @@ def test_read_write_toml_configuration_file():
 
 [JOB]
 mode = "development"
-max_nb_of_workers = "1:int"
 
 [CORE]
 root_folder = "./taipy/"
-storage_folder = ".data/"
+storage_folder = "user_data/"
+taipy_storage_folder = ".taipy/"
 repository_type = "filesystem"
 read_entity_retry = "0:int"
 mode = "development"
@@ -173,9 +170,6 @@ tasks = [ "test_task:SECTION",]
 additional_data_nodes = [ "test_pickle_dn:SECTION",]
 frequency = "DAILY:FREQUENCY"
 
-[VERSION_MIGRATION.migration_fcts."1.0"]
-test_csv_dn = "tests.core.config.test_config_serialization.migrate_csv_path:function"
-
 [SCENARIO.default.comparators]
 
 [SCENARIO.default.sequences]
@@ -202,12 +196,10 @@ sequence1 = [ "test_task:SECTION",]
     assert actual_config_2 == expected_toml_config
 
     assert Config.unique_sections is not None
-    assert len(Config.unique_sections) == 3
+    assert len(Config.unique_sections) == 2
 
     assert Config.unique_sections[JobConfig.name].mode == "development"
-    assert Config.unique_sections[JobConfig.name].max_nb_of_workers == 1
-
-    assert Config.unique_sections[MigrationConfig.name].migration_fcts["1.0"] == {"test_csv_dn": migrate_csv_path}
+    assert Config.unique_sections[JobConfig.name].max_nb_of_workers is None
 
     assert Config.sections is not None
     assert len(Config.sections) == 3
@@ -285,12 +277,12 @@ def test_read_write_json_configuration_file():
         """{
 "TAIPY": {},
 "JOB": {
-"mode": "development",
-"max_nb_of_workers": "1:int"
+"mode": "development"
 },
 "CORE": {
 "root_folder": "./taipy/",
-"storage_folder": ".data/",
+"storage_folder": "user_data/",
+"taipy_storage_folder": ".taipy/",
 "repository_type": "filesystem",
 "read_entity_retry": "0:int",
 "mode": "development",
@@ -300,13 +292,6 @@ def test_read_write_json_configuration_file():
 "core_version": "{CoreSection._CURRENT_CORE_VERSION}"
 """
         + """
-},
-"VERSION_MIGRATION": {
-"migration_fcts": {
-"1.0": {
-"test_csv_dn": "tests.core.config.test_config_serialization.migrate_csv_path:function"
-}
-}
 },
 "DATA_NODE": {
 "default": {
@@ -403,12 +388,10 @@ def test_read_write_json_configuration_file():
     assert actual_config_2 == expected_json_config
 
     assert Config.unique_sections is not None
-    assert len(Config.unique_sections) == 3
+    assert len(Config.unique_sections) == 2
 
     assert Config.unique_sections[JobConfig.name].mode == "development"
-    assert Config.unique_sections[JobConfig.name].max_nb_of_workers == 1
-
-    assert Config.unique_sections[MigrationConfig.name].migration_fcts["1.0"] == {"test_csv_dn": migrate_csv_path}
+    assert Config.unique_sections[JobConfig.name].max_nb_of_workers is None
 
     assert Config.sections is not None
     assert len(Config.sections) == 3
@@ -532,9 +515,6 @@ tasks = [ "test_task:SECTION",]
 sequences.test_sequence = [ "test_task:SECTION",]
 frequency = "DAILY:FREQUENCY"
 
-[VERSION_MIGRATION.migration_fcts."1.0"]
-test_csv_dn = "tests.core.config.test_config_serialization.migrate_csv_path:function"
-
 [SCENARIO.default.comparators]
 
 [SCENARIO.test_scenario.comparators]
@@ -549,7 +529,7 @@ test_json_dn = [ "tests.core.config.test_config_serialization.compare_function:f
     Config.restore(tf.filename)
 
     assert Config.unique_sections is not None
-    assert len(Config.unique_sections) == 3
+    assert len(Config.unique_sections) == 2
 
     assert Config.unique_sections[CoreSection.name].root_folder == "./taipy/"
     assert Config.unique_sections[CoreSection.name].storage_folder == ".data/"
@@ -561,8 +541,6 @@ test_json_dn = [ "tests.core.config.test_config_serialization.compare_function:f
 
     assert Config.unique_sections[JobConfig.name].mode == "development"
     assert Config.unique_sections[JobConfig.name].max_nb_of_workers == 1
-
-    assert Config.unique_sections[MigrationConfig.name].migration_fcts["1.0"] == {"test_csv_dn": migrate_csv_path}
 
     assert Config.sections is not None
     assert len(Config.sections) == 3
@@ -644,13 +622,6 @@ def test_read_write_json_configuration_file_migrate_sequence_in_scenario():
 "version_number": "",
 "force": "False:bool"
 },
-"VERSION_MIGRATION": {
-"migration_fcts": {
-"1.0": {
-"test_csv_dn": "tests.core.config.test_config_serialization.migrate_csv_path:function"
-}
-}
-},
 "DATA_NODE": {
 "default": {
 "storage_type": "pickle",
@@ -725,7 +696,7 @@ def test_read_write_json_configuration_file_migrate_sequence_in_scenario():
     Config.restore(tf.filename)
 
     assert Config.unique_sections is not None
-    assert len(Config.unique_sections) == 3
+    assert len(Config.unique_sections) == 2
 
     assert Config.unique_sections[CoreSection.name].root_folder == "./taipy/"
     assert Config.unique_sections[CoreSection.name].storage_folder == ".data/"
@@ -737,8 +708,6 @@ def test_read_write_json_configuration_file_migrate_sequence_in_scenario():
 
     assert Config.unique_sections[JobConfig.name].mode == "development"
     assert Config.unique_sections[JobConfig.name].max_nb_of_workers == 1
-
-    assert Config.unique_sections[MigrationConfig.name].migration_fcts["1.0"] == {"test_csv_dn": migrate_csv_path}
 
     assert Config.sections is not None
     assert len(Config.sections) == 3

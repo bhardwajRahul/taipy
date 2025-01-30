@@ -1,4 +1,4 @@
-# Copyright 2023 Avaiga Private Limited
+# Copyright 2021-2025 Avaiga Private Limited
 #
 # Licensed under the Apache License, Version 2.0 (the "License"); you may not use this file except in compliance with
 # the License. You may obtain a copy of the License at
@@ -14,40 +14,62 @@ from datetime import datetime, timedelta
 from time import sleep
 from unittest import mock
 
+import freezegun
+import pandas as pd
 import pytest
 
-import src.taipy.core as tp
-from src.taipy.core._orchestrator._orchestrator_factory import _OrchestratorFactory
-from src.taipy.core.config.job_config import JobConfig
-from src.taipy.core.data._data_manager import _DataManager
-from src.taipy.core.data.data_node import DataNode
-from src.taipy.core.data.data_node_id import DataNodeId
-from src.taipy.core.data.in_memory import InMemoryDataNode
-from src.taipy.core.exceptions.exceptions import DataNodeIsBeingEdited, NoData
-from src.taipy.core.job.job_id import JobId
-from taipy.config import Config
-from taipy.config.common.scope import Scope
-from taipy.config.exceptions.exceptions import InvalidConfigurationId
+import taipy.core as tp
+from taipy.common.config import Config
+from taipy.common.config.common.scope import Scope
+from taipy.common.config.exceptions.exceptions import InvalidConfigurationId
+from taipy.core.data._data_manager import _DataManager
+from taipy.core.data._data_manager_factory import _DataManagerFactory
+from taipy.core.data.data_node import DataNode
+from taipy.core.data.data_node_id import (
+    EDIT_COMMENT_KEY,
+    EDIT_EDITOR_ID_KEY,
+    EDIT_JOB_ID_KEY,
+    EDIT_TIMESTAMP_KEY,
+    DataNodeId,
+)
+from taipy.core.data.in_memory import InMemoryDataNode
+from taipy.core.exceptions.exceptions import DataNodeIsBeingEdited, NoData
+from taipy.core.job.job_id import JobId
+from taipy.core.task.task import Task
 
 from .utils import FakeDataNode
 
 
 def funct_a_b(input: str):
-    print("task_a_b")
+    print("task_a_b")  # noqa: T201
     return "B"
 
 
 def funct_b_c(input: str):
-    print("task_b_c")
+    print("task_b_c")  # noqa: T201
     return "C"
 
 
 def funct_b_d(input: str):
-    print("task_b_d")
+    print("task_b_d")  # noqa: T201
     return "D"
 
 
 class TestDataNode:
+    def test_dn_equals(self, data_node):
+        data_manager = _DataManagerFactory()._build_manager()
+
+        dn_id = data_node.id
+        data_manager._set(data_node)
+
+        # # To test if instance is same type
+        task = Task("task", {}, print, [], [], dn_id)
+
+        dn_2 = data_manager._get(dn_id)
+        assert data_node == dn_2
+        assert data_node != dn_id
+        assert data_node != task
+
     def test_create_with_default_values(self):
         dn = DataNode("foo_bar")
         assert dn.config_id == "foo_bar"
@@ -61,6 +83,41 @@ class TestDataNode:
         assert not dn.is_ready_for_reading
         assert len(dn.properties) == 0
 
+    def test_create_with_ranks(self):
+        # Test _rank is propagated from the config
+        cfg = Config.configure_data_node("foo_bar")
+        cfg._ranks = {"A": 1, "B": 2, "C": 0}
+
+        dn = DataNode("foo_bar")
+        assert dn.config_id == "foo_bar"
+        assert dn.scope == Scope.SCENARIO
+        assert dn.id is not None
+        assert dn.name is None
+        assert dn.owner_id is None
+        assert dn.parent_ids == set()
+        assert dn.last_edit_date is None
+        assert dn.job_ids == []
+        assert not dn.is_ready_for_reading
+        assert len(dn.properties) == 0
+        assert dn._get_rank("A") == 1
+        assert dn._get_rank("B") == 2
+        assert dn._get_rank("C") == 0
+
+    def test_is_up_to_date_when_not_written(self):
+        dn_confg_1 = Config.configure_in_memory_data_node("dn_1", default_data="a")
+        dn_confg_2 = Config.configure_in_memory_data_node("dn_2")
+        task_config_1 = Config.configure_task("t1", funct_a_b, [dn_confg_1], [dn_confg_2])
+        scenario_config = Config.configure_scenario("sc", [task_config_1])
+
+        scenario = tp.create_scenario(scenario_config)
+
+        assert scenario.dn_1.is_up_to_date is True
+        assert scenario.dn_2.is_up_to_date is False
+
+        tp.submit(scenario)
+        assert scenario.dn_1.is_up_to_date is True
+        assert scenario.dn_2.is_up_to_date is True
+
     def test_create(self):
         a_date = datetime.now()
         dn = DataNode(
@@ -70,7 +127,7 @@ class TestDataNode:
             "a_scenario_id",
             {"a_parent_id"},
             a_date,
-            [dict(job_id="a_job_id")],
+            [{"job_id": "a_job_id"}],
             edit_in_progress=False,
             prop="erty",
             name="a name",
@@ -211,39 +268,39 @@ class TestDataNode:
         assert dn.job_ids == [job_id]
 
     def test_is_valid_no_validity_period(self):
-        # Test Never been writen
+        # Test Never been written
         dn = InMemoryDataNode("foo", Scope.SCENARIO, DataNodeId("id"), "name", "owner_id")
         assert not dn.is_valid
 
-        # test has been writen
+        # test has been written
         dn.write("My data")
         assert dn.is_valid
 
     def test_is_valid_with_30_min_validity_period(self):
-        # Test Never been writen
+        # Test Never been written
         dn = InMemoryDataNode(
             "foo", Scope.SCENARIO, DataNodeId("id"), "name", "owner_id", validity_period=timedelta(minutes=30)
         )
         assert dn.is_valid is False
 
-        # Has been writen less than 30 minutes ago
+        # Has been written less than 30 minutes ago
         dn.write("My data")
         assert dn.is_valid is True
 
-        # Has been writen more than 30 minutes ago
+        # Has been written more than 30 minutes ago
         dn.last_edit_date = datetime.now() + timedelta(days=-1)
         assert dn.is_valid is False
 
     def test_is_valid_with_5_days_validity_period(self):
-        # Test Never been writen
+        # Test Never been written
         dn = InMemoryDataNode("foo", Scope.SCENARIO, validity_period=timedelta(days=5))
         assert dn.is_valid is False
 
-        # Has been writen less than 30 minutes ago
+        # Has been written less than 30 minutes ago
         dn.write("My data")
         assert dn.is_valid is True
 
-        # Has been writen more than 30 minutes ago
+        # Has been written more than 30 minutes ago
         dn._last_edit_date = datetime.now() - timedelta(days=6)
         _DataManager()._set(dn)
         assert dn.is_valid is False
@@ -355,8 +412,6 @@ class TestDataNode:
         assert not dn_3.is_up_to_date
 
     def test_do_not_recompute_data_node_valid_but_continue_sequence_execution(self):
-        Config.configure_job_executions(mode=JobConfig._DEVELOPMENT_MODE)
-
         a = Config.configure_data_node("A", "pickle", default_data="A")
         b = Config.configure_data_node("B", "pickle")
         c = Config.configure_data_node("C", "pickle")
@@ -366,8 +421,6 @@ class TestDataNode:
         task_b_c = Config.configure_task("task_b_c", funct_b_c, input=b, output=c)
         task_b_d = Config.configure_task("task_b_d", funct_b_d, input=b, output=d)
         scenario_cfg = Config.configure_scenario("scenario", [task_a_b, task_b_c, task_b_d])
-
-        _OrchestratorFactory._build_dispatcher()
 
         scenario = tp.create_scenario(scenario_cfg)
         scenario.submit()
@@ -399,7 +452,7 @@ class TestDataNode:
         dn = FakeDataNode("foo")
 
         with pytest.raises(NoData):
-            dn.expiration_date
+            _ = dn.expiration_date
 
     def test_validity_null_if_never_write(self):
         dn = FakeDataNode("foo")
@@ -414,7 +467,7 @@ class TestDataNode:
             owner_id=None,
             parent_ids=None,
             last_edit_date=current_datetime,
-            edits=[dict(job_id="a_job_id")],
+            edits=[{"job_id": "a_job_id"}],
             edit_in_progress=False,
             validity_period=None,
             properties={
@@ -472,6 +525,8 @@ class TestDataNode:
         _DataManager._set(dn_2)
         assert dn_1.parent_ids == {"sc1"}
         assert dn_2.parent_ids == {"sc1"}
+        dn_2._parent_ids.clear()
+        _DataManager._set(dn_2)
 
         # auto set & reload on edit_in_progress attribute
         assert not dn_2.edit_in_progress
@@ -498,6 +553,57 @@ class TestDataNode:
         assert dn_1.validity_period == time_period_2
         assert dn_2.validity_period == time_period_2
 
+        dn_1.last_edit_date = new_datetime
+
+        assert len(dn_1.job_ids) == 1
+        assert len(dn_2.job_ids) == 1
+
+        with dn_1 as dn:
+            assert dn.config_id == "foo"
+            assert dn.owner_id is None
+            assert dn.scope == Scope.SCENARIO
+            assert dn.last_edit_date == new_datetime
+            assert dn.name == "def"
+            assert dn.edit_in_progress
+            assert dn.validity_period == time_period_2
+            assert len(dn.job_ids) == 1
+            assert dn._is_in_context
+
+            new_datetime_2 = new_datetime + timedelta(5)
+
+            dn.scope = Scope.CYCLE
+            dn.last_edit_date = new_datetime_2
+            dn.name = "abc"
+            dn.edit_in_progress = False
+            dn.validity_period = None
+
+            assert dn.config_id == "foo"
+            assert dn.owner_id is None
+            assert dn.scope == Scope.SCENARIO
+            assert dn.last_edit_date == new_datetime
+            assert dn.name == "def"
+            assert dn.edit_in_progress
+            assert dn.validity_period == time_period_2
+            assert len(dn.job_ids) == 1
+
+        assert dn_1.config_id == "foo"
+        assert dn_1.owner_id is None
+        assert dn_1.scope == Scope.CYCLE
+        assert dn_1.last_edit_date == new_datetime_2
+        assert dn_1.name == "abc"
+        assert not dn_1.edit_in_progress
+        assert dn_1.validity_period is None
+        assert not dn_1._is_in_context
+        assert len(dn_1.job_ids) == 1
+
+    def test_auto_set_and_reload_properties(self):
+        dn_1 = InMemoryDataNode("foo", scope=Scope.GLOBAL, properties={"name": "def"})
+
+        dm = _DataManager()
+        dm._set(dn_1)
+
+        dn_2 = dm._get(dn_1)
+
         # auto set & reload on properties attribute
         assert dn_1.properties == {"name": "def"}
         assert dn_2.properties == {"name": "def"}
@@ -519,151 +625,60 @@ class TestDataNode:
             "temp_key_1": "temp_value_1",
             "temp_key_2": "temp_value_2",
         }
-        assert dn_2.properties == {
-            "name": "def",
-            "qux": 5,
-            "temp_key_1": "temp_value_1",
-            "temp_key_2": "temp_value_2",
-        }
+        assert dn_2.properties == {"name": "def", "qux": 5, "temp_key_1": "temp_value_1", "temp_key_2": "temp_value_2"}
         dn_1.properties.pop("temp_key_1")
         assert "temp_key_1" not in dn_1.properties.keys()
         assert "temp_key_1" not in dn_1.properties.keys()
-        assert dn_1.properties == {
-            "name": "def",
-            "qux": 5,
-            "temp_key_2": "temp_value_2",
-        }
-        assert dn_2.properties == {
-            "name": "def",
-            "qux": 5,
-            "temp_key_2": "temp_value_2",
-        }
+        assert dn_1.properties == {"name": "def", "qux": 5, "temp_key_2": "temp_value_2"}
+        assert dn_2.properties == {"name": "def", "qux": 5, "temp_key_2": "temp_value_2"}
         dn_2.properties.pop("temp_key_2")
-        assert dn_1.properties == {
-            "qux": 5,
-            "name": "def",
-        }
-        assert dn_2.properties == {
-            "qux": 5,
-            "name": "def",
-        }
+        assert dn_1.properties == {"qux": 5, "name": "def"}
+        assert dn_2.properties == {"qux": 5, "name": "def"}
         assert "temp_key_2" not in dn_1.properties.keys()
         assert "temp_key_2" not in dn_2.properties.keys()
 
         dn_1.properties["temp_key_3"] = 0
-        assert dn_1.properties == {
-            "qux": 5,
-            "temp_key_3": 0,
-            "name": "def",
-        }
-        assert dn_2.properties == {
-            "qux": 5,
-            "temp_key_3": 0,
-            "name": "def",
-        }
+        assert dn_1.properties == {"qux": 5, "temp_key_3": 0, "name": "def"}
+        assert dn_2.properties == {"qux": 5, "temp_key_3": 0, "name": "def"}
         dn_1.properties.update({"temp_key_3": 1})
-        assert dn_1.properties == {
-            "qux": 5,
-            "temp_key_3": 1,
-            "name": "def",
-        }
-        assert dn_2.properties == {
-            "qux": 5,
-            "temp_key_3": 1,
-            "name": "def",
-        }
-        dn_1.properties.update(dict())
-        assert dn_1.properties == {
-            "qux": 5,
-            "temp_key_3": 1,
-            "name": "def",
-        }
-        assert dn_2.properties == {
-            "qux": 5,
-            "temp_key_3": 1,
-            "name": "def",
-        }
+        assert dn_1.properties == {"qux": 5, "temp_key_3": 1, "name": "def"}
+        assert dn_2.properties == {"qux": 5, "temp_key_3": 1, "name": "def"}
+        dn_1.properties.update({})
+        assert dn_1.properties == {"qux": 5, "temp_key_3": 1, "name": "def"}
+        assert dn_2.properties == {"qux": 5, "temp_key_3": 1, "name": "def"}
         dn_1.properties["temp_key_4"] = 0
         dn_1.properties["temp_key_5"] = 0
 
-        dn_1.last_edit_date = new_datetime
-
-        assert len(dn_1.job_ids) == 1
-        assert len(dn_2.job_ids) == 1
-
         with dn_1 as dn:
-            assert dn.config_id == "foo"
-            assert dn.owner_id is None
-            assert dn.scope == Scope.SCENARIO
-            assert dn.last_edit_date == new_datetime
-            assert dn.name == "def"
-            assert dn.edit_in_progress
-            assert dn.validity_period == time_period_2
-            assert len(dn.job_ids) == 1
             assert dn._is_in_context
             assert dn.properties["qux"] == 5
             assert dn.properties["temp_key_3"] == 1
             assert dn.properties["temp_key_4"] == 0
             assert dn.properties["temp_key_5"] == 0
 
-            new_datetime_2 = new_datetime + timedelta(5)
-
-            dn.scope = Scope.CYCLE
-            dn.last_edit_date = new_datetime_2
-            dn.name = "abc"
-            dn.edit_in_progress = False
-            dn.validity_period = None
             dn.properties["qux"] = 9
             dn.properties.pop("temp_key_3")
             dn.properties.pop("temp_key_4")
             dn.properties.update({"temp_key_4": 1})
             dn.properties.update({"temp_key_5": 2})
             dn.properties.pop("temp_key_5")
-            dn.properties.update(dict())
+            dn.properties.update({})
 
-            assert dn.config_id == "foo"
-            assert dn.owner_id is None
-            assert dn.scope == Scope.SCENARIO
-            assert dn.last_edit_date == new_datetime
-            assert dn.name == "def"
-            assert dn.edit_in_progress
-            assert dn.validity_period == time_period_2
-            assert len(dn.job_ids) == 1
             assert dn.properties["qux"] == 5
             assert dn.properties["temp_key_3"] == 1
             assert dn.properties["temp_key_4"] == 0
             assert dn.properties["temp_key_5"] == 0
 
-        assert dn_1.config_id == "foo"
-        assert dn_1.owner_id is None
-        assert dn_1.scope == Scope.CYCLE
-        assert dn_1.last_edit_date == new_datetime_2
-        assert dn_1.name == "abc"
-        assert not dn_1.edit_in_progress
-        assert dn_1.validity_period is None
         assert not dn_1._is_in_context
-        assert len(dn_1.job_ids) == 1
         assert dn_1.properties["qux"] == 9
         assert "temp_key_3" not in dn_1.properties.keys()
         assert dn_1.properties["temp_key_4"] == 1
         assert "temp_key_5" not in dn_1.properties.keys()
 
     def test_get_parents(self, data_node):
-        with mock.patch("src.taipy.core.get_parents") as mck:
+        with mock.patch("taipy.core.get_parents") as mck:
             data_node.get_parents()
             mck.assert_called_once_with(data_node)
-
-    def test_cacheable_deprecated_false(self):
-        dn = FakeDataNode("foo")
-        with pytest.warns(DeprecationWarning):
-            dn.cacheable
-        assert dn.cacheable is False
-
-    def test_cacheable_deprecated_true(self):
-        dn = FakeDataNode("foo", properties={"cacheable": True})
-        with pytest.warns(DeprecationWarning):
-            dn.cacheable
-        assert dn.cacheable is True
 
     def test_data_node_with_env_variable_value_not_stored(self):
         dn_config = Config.configure_data_node("A", prop="ENV[FOO]")
@@ -671,7 +686,6 @@ class TestDataNode:
             dn = _DataManager._bulk_get_or_create([dn_config])[dn_config]
             assert dn._properties.data["prop"] == "ENV[FOO]"
             assert dn.properties["prop"] == "bar"
-            assert dn.prop == "bar"
 
     def test_path_populated_with_config_default_path(self):
         dn_config = Config.configure_data_node("data_node", "pickle", default_path="foo.p")
@@ -681,7 +695,7 @@ class TestDataNode:
         data_node.path = "baz.p"
         assert data_node.path == "baz.p"
 
-    def test_track_edit(self):
+    def test_edit_edit_tracking(self):
         dn_config = Config.configure_data_node("A")
         data_node = _DataManager._bulk_get_or_create([dn_config])[dn_config]
 
@@ -715,12 +729,12 @@ class TestDataNode:
             "a_scenario_id",
             {"a_parent_id"},
             a_date,
-            [dict(job_id="a_job_id")],
+            [{"job_id": "a_job_id"}],
             edit_in_progress=False,
             prop="erty",
             name="a name",
         )
-        with mock.patch("src.taipy.core.get") as get_mck:
+        with mock.patch("taipy.core.get") as get_mck:
 
             class MockOwner:
                 label = "owner_label"
@@ -741,7 +755,7 @@ class TestDataNode:
             "a_scenario_id",
             {"a_parent_id"},
             a_date,
-            [dict(job_id="a_job_id")],
+            [{"job_id": "a_job_id"}],
             edit_in_progress=False,
             label="a label",
             name="a name",
@@ -759,3 +773,181 @@ class TestDataNode:
         # This new syntax will be the only one allowed: https://github.com/Avaiga/taipy-core/issues/806
         dn.properties["name"] = "baz"
         assert dn.name == "baz"
+
+    def test_locked_data_node_write_should_fail_with_wrong_editor(self):
+        dn_config = Config.configure_data_node("A")
+        dn = _DataManager._bulk_get_or_create([dn_config])[dn_config]
+        dn.lock_edit("editor_1")
+
+        # Should raise exception for wrong editor
+        with pytest.raises(DataNodeIsBeingEdited):
+            dn.write("data", editor_id="editor_2")
+
+        # Should succeed with correct editor
+        dn.write("data", editor_id="editor_1")
+        assert dn.read() == "data"
+
+    def test_locked_data_node_write_should_fail_before_expiration_date_and_succeed_after(self):
+        dn_config = Config.configure_data_node("A")
+        dn = _DataManager._bulk_get_or_create([dn_config])[dn_config]
+
+        lock_time = datetime.now()
+        with freezegun.freeze_time(lock_time):
+            dn.lock_edit("editor_1")
+
+        with freezegun.freeze_time(lock_time + timedelta(minutes=29)):
+            # Should raise exception for wrong editor and expiration date NOT passed
+            with pytest.raises(DataNodeIsBeingEdited):
+                dn.write("data", editor_id="editor_2")
+
+        with freezegun.freeze_time(lock_time + timedelta(minutes=31)):
+            # Should succeed with wrong editor but expiration date passed
+            dn.write("data", editor_id="editor_2")
+            assert dn.read() == "data"
+
+    def test_locked_data_node_append_should_fail_with_wrong_editor(self):
+        dn_config = Config.configure_csv_data_node("A")
+        dn = _DataManager._bulk_get_or_create([dn_config])[dn_config]
+        first_line = pd.DataFrame(data={'col1': [1], 'col2': [3]})
+        second_line = pd.DataFrame(data={'col1': [2], 'col2': [4]})
+        data = pd.DataFrame(data={'col1': [1, 2], 'col2': [3, 4]})
+        dn.write(first_line)
+        assert first_line.equals(dn.read())
+
+        dn.lock_edit("editor_1")
+
+        with pytest.raises(DataNodeIsBeingEdited):
+            dn.append(second_line, editor_id="editor_2")
+
+        dn.append(second_line, editor_id="editor_1")
+        assert dn.read().equals(data)
+
+    def test_locked_data_node_append_should_fail_before_expiration_date_and_succeed_after(self):
+        dn_config = Config.configure_csv_data_node("A")
+        dn = _DataManager._bulk_get_or_create([dn_config])[dn_config]
+        first_line = pd.DataFrame(data={'col1': [1], 'col2': [3]})
+        second_line = pd.DataFrame(data={'col1': [2], 'col2': [4]})
+        data = pd.DataFrame(data={'col1': [1, 2], 'col2': [3, 4]})
+        dn.write(first_line)
+        assert first_line.equals(dn.read())
+
+        lock_time = datetime.now()
+        with freezegun.freeze_time(lock_time):
+            dn.lock_edit("editor_1")
+
+        with freezegun.freeze_time(lock_time + timedelta(minutes=29)):
+            # Should raise exception for wrong editor and expiration date NOT passed
+            with pytest.raises(DataNodeIsBeingEdited):
+                dn.append(second_line, editor_id="editor_2")
+
+        with freezegun.freeze_time(lock_time + timedelta(minutes=31)):
+            # Should succeed with wrong editor but expiration date passed
+            dn.append(second_line, editor_id="editor_2")
+            assert dn.read().equals(data)
+
+    def test_orchestrator_write_without_editor_id(self):
+        dn_config = Config.configure_data_node("A")
+        dn = _DataManager._bulk_get_or_create([dn_config])[dn_config]
+        dn.lock_edit("editor_1")
+
+        # Orchestrator write without editor_id should succeed
+        dn.write("orchestrator_data")
+        assert dn.read() == "orchestrator_data"
+
+    def test_editor_fails_writing_a_data_node_locked_by_orchestrator(self):
+        dn_config = Config.configure_data_node("A")
+        dn = _DataManager._bulk_get_or_create([dn_config])[dn_config]
+        dn.lock_edit() # Locked by orchestrator
+
+        with pytest.raises(DataNodeIsBeingEdited):
+            dn.write("data", editor_id="editor_1")
+
+        # Orchestrator write without editor_id should succeed
+        dn.write("orchestrator_data", job_id=JobId("job_1"))
+        assert dn.read() == "orchestrator_data"
+
+    def test_editor_fails_appending_a_data_node_locked_by_orchestrator(self):
+        dn_config = Config.configure_csv_data_node("A")
+        dn = _DataManager._bulk_get_or_create([dn_config])[dn_config]
+        first_line = pd.DataFrame(data={'col1': [1], 'col2': [3]})
+        second_line = pd.DataFrame(data={'col1': [2], 'col2': [4]})
+        data = pd.DataFrame(data={'col1': [1, 2], 'col2': [3, 4]})
+        dn.write(first_line)
+        assert first_line.equals(dn.read())
+        dn = _DataManager._bulk_get_or_create([dn_config])[dn_config]
+        dn.lock_edit() # Locked by orchestrator
+
+        with pytest.raises(DataNodeIsBeingEdited):
+            dn.append(second_line, editor_id="editor_1")
+        assert dn.read().equals(first_line)
+
+        dn.append(second_line, job_id=JobId("job_1"))
+        assert dn.read().equals(data)
+
+    def test_track_edit(self):
+        dn_config = Config.configure_data_node("A")
+        data_node = _DataManager._bulk_get_or_create([dn_config])[dn_config]
+
+        before = datetime.now()
+        data_node.track_edit(job_id="job_1")
+        data_node.track_edit(editor_id="editor_1")
+        data_node.track_edit(comment="This is a comment on this edit")
+        data_node.track_edit(editor_id="editor_2", comment="This is another comment on this edit")
+        data_node.track_edit(editor_id="editor_3", foo="bar")
+        after = datetime.now()
+        timestamp = datetime.now()
+        data_node.track_edit(timestamp=timestamp)
+        _DataManagerFactory._build_manager()._set(data_node)
+        # To save the edits because track edit does not save the data node
+
+        assert len(data_node.edits) == 6
+        assert data_node.edits[-1] == data_node.get_last_edit()
+        assert data_node.last_edit_date == data_node.get_last_edit().get(EDIT_TIMESTAMP_KEY)
+
+        edit_0 = data_node.edits[0]
+        assert len(edit_0) == 2
+        assert edit_0[EDIT_JOB_ID_KEY] == "job_1"
+        assert edit_0[EDIT_TIMESTAMP_KEY] >= before
+        assert edit_0[EDIT_TIMESTAMP_KEY] <= after
+
+        edit_1 = data_node.edits[1]
+        assert len(edit_1) == 2
+        assert edit_1[EDIT_EDITOR_ID_KEY] == "editor_1"
+        assert edit_1[EDIT_TIMESTAMP_KEY] >= before
+        assert edit_1[EDIT_TIMESTAMP_KEY] <= after
+
+        edit_2 = data_node.edits[2]
+        assert len(edit_2) == 2
+        assert edit_2[EDIT_COMMENT_KEY] == "This is a comment on this edit"
+        assert edit_2[EDIT_TIMESTAMP_KEY] >= before
+        assert edit_2[EDIT_TIMESTAMP_KEY] <= after
+
+        edit_3 = data_node.edits[3]
+        assert len(edit_3) == 3
+        assert edit_3[EDIT_EDITOR_ID_KEY] == "editor_2"
+        assert edit_3[EDIT_COMMENT_KEY] == "This is another comment on this edit"
+        assert edit_3[EDIT_TIMESTAMP_KEY] >= before
+        assert edit_3[EDIT_TIMESTAMP_KEY] <= after
+
+        edit_4 = data_node.edits[4]
+        assert len(edit_4) == 3
+        assert edit_4[EDIT_EDITOR_ID_KEY] == "editor_3"
+        assert edit_4["foo"] == "bar"
+        assert edit_4[EDIT_TIMESTAMP_KEY] >= before
+        assert edit_4[EDIT_TIMESTAMP_KEY] <= after
+
+        edit_5 = data_node.edits[5]
+        assert len(edit_5) == 1
+        assert edit_5[EDIT_TIMESTAMP_KEY] == timestamp
+
+    def test_normalize_path(self):
+        dn = DataNode(
+            config_id="foo_bar",
+            scope=Scope.SCENARIO,
+            id=DataNodeId("an_id"),
+            path=r"data\foo\bar.csv",
+        )
+        assert dn.config_id == "foo_bar"
+        assert dn.scope == Scope.SCENARIO
+        assert dn.id == "an_id"
+        assert dn.properties["path"] == "data/foo/bar.csv"

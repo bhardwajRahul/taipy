@@ -1,4 +1,4 @@
-# Copyright 2023 Avaiga Private Limited
+# Copyright 2021-2025 Avaiga Private Limited
 #
 # Licensed under the Apache License, Version 2.0 (the "License"); you may not use this file except in compliance with
 # the License. You may obtain a copy of the License at
@@ -15,12 +15,10 @@ from unittest.mock import patch
 
 import pytest
 
-from taipy.config import Config
-from taipy.config._config import _Config
-from taipy.config._serializer._toml_serializer import _TomlSerializer
-from taipy.config.checker._checker import _Checker
-from taipy.config.checker.issue_collector import IssueCollector
+from taipy.common.config import Config, _inject_section
 from taipy.gui import Gui
+from taipy.gui._default_config import default_config
+from taipy.gui._gui_section import _GuiSection
 
 
 class NamedTemporaryFile:
@@ -38,32 +36,24 @@ class NamedTemporaryFile:
         os.unlink(self.filename)
 
 
-def init_config():
-    Config.unblock_update()
-    Config._default_config = _Config()._default_config()
-    Config._python_config = _Config()
-    Config._file_config = None
-    Config._env_file_config = None
-    Config._applied_config = _Config._default_config()
-    Config._collector = IssueCollector()
-    Config._serializer = _TomlSerializer()
-    _Checker._checkers = []
+@pytest.fixture
+def init_config(reset_configuration_singleton):
+    def _init_config():
+        reset_configuration_singleton()
 
-    from taipy.config import _inject_section
-    from taipy.gui._default_config import default_config
-    from taipy.gui._gui_section import _GuiSection
+        _inject_section(
+            _GuiSection,
+            "gui_config",
+            _GuiSection(property_list=list(default_config)),
+            [("configure_gui", _GuiSection._configure)],
+            add_to_unconflicted_sections=True,
+        )
 
-    _inject_section(
-        _GuiSection,
-        "gui_config",
-        _GuiSection(property_list=list(default_config)),
-        [("configure_gui", _GuiSection._configure)],
-        add_to_unconflicted_sections=True,
-    )
+    return _init_config
 
 
 @pytest.fixture(scope="function", autouse=True)
-def cleanup_test(helpers):
+def cleanup_test(helpers, init_config):
     init_config()
     helpers.test_cleanup()
     yield
@@ -74,7 +64,8 @@ def cleanup_test(helpers):
 def test_gui_service_arguments_hierarchy():
     # Test default configuration
     gui = Gui()
-    gui.run(run_server=False)
+    with patch("sys.argv", ["prog"]):
+        gui.run(run_server=False)
     service_config = gui._config.config
     assert not service_config["allow_unsafe_werkzeug"]
     assert service_config["async_mode"] == "gevent"
@@ -91,11 +82,13 @@ def test_gui_service_arguments_hierarchy():
     assert service_config["margin"] is None
     assert service_config["ngrok_token"] == ""
     assert service_config["notification_duration"] == 3000
+    assert service_config["port"] == 5000
     assert service_config["propagate"]
     assert service_config["run_browser"]
     assert not service_config["run_in_thread"]
     assert not service_config["run_server"]
     assert not service_config["single_client"]
+    assert service_config["state_retention_period"] == 0
     assert not service_config["system_notification"]
     assert service_config["theme"] is None
     assert service_config["time_zone"] is None
@@ -105,12 +98,12 @@ def test_gui_service_arguments_hierarchy():
     assert not service_config["use_reloader"]
     assert service_config["watermark"] == "Taipy inside"
     assert service_config["webapp_path"] is None
-    assert service_config["port"] == 5000
     gui.stop()
 
     # Override default configuration by explicit defined arguments in Gui.run()
     gui = Gui()
-    gui.run(run_server=False, watermark="", host="my_host", port=5001)
+    with patch("sys.argv", ["prog"]):
+        gui.run(run_server=False, watermark="", host="my_host", port=5001)
     service_config = gui._config.config
     assert service_config["watermark"] == ""
     assert service_config["host"] == "my_host"
@@ -120,8 +113,10 @@ def test_gui_service_arguments_hierarchy():
     # Override Gui.run() arguments by explicit defined arguments in Config.configure_gui()
     Config.configure_gui(dark_mode=False, host="my_2nd_host", port=5002)
     gui = Gui()
-    gui.run(run_server=False, watermark="", host="my_host", port=5001)
+    with patch("sys.argv", ["prog"]):
+        gui.run(run_server=False, watermark="", host="my_host", port=5001)
     service_config = gui._config.config
+
     assert not service_config["dark_mode"]
     assert service_config["host"] == "my_2nd_host"
     assert service_config["watermark"] == ""
@@ -141,7 +136,8 @@ use_reloader = "true:bool"
     )
     Config.load(toml_config.filename)
     gui = Gui()
-    gui.run(run_server=False, host="my_host", port=5001)
+    with patch("sys.argv", ["prog"]):
+        gui.run(run_server=False, host="my_host", port=5001)
     service_config = gui._config.config
     assert service_config["host"] == "my_3rd_host"
     assert service_config["port"] == 5003

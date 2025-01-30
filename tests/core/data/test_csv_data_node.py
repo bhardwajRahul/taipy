@@ -1,4 +1,4 @@
-# Copyright 2023 Avaiga Private Limited
+# Copyright 2021-2025 Avaiga Private Limited
 #
 # Licensed under the Apache License, Version 2.0 (the "License"); you may not use this file except in compliance with
 # the License. You may obtain a copy of the License at
@@ -9,26 +9,30 @@
 # an "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied. See the License for the
 # specific language governing permissions and limitations under the License.
 
+import dataclasses
 import os
 import pathlib
-from datetime import datetime
+import re
+import uuid
+from datetime import datetime, timedelta
 from time import sleep
 
-import modin.pandas as modin_pd
+import freezegun
 import numpy as np
 import pandas as pd
 import pytest
-from modin.pandas.test.utils import df_equals
 from pandas.testing import assert_frame_equal
 
-from src.taipy.core.data._data_manager import _DataManager
-from src.taipy.core.data.csv import CSVDataNode
-from src.taipy.core.data.data_node_id import DataNodeId
-from src.taipy.core.data.operator import JoinOperator, Operator
-from src.taipy.core.exceptions.exceptions import InvalidExposedType, NoData
-from taipy.config.common.scope import Scope
-from taipy.config.config import Config
-from taipy.config.exceptions.exceptions import InvalidConfigurationId
+from taipy.common.config import Config
+from taipy.common.config.common.scope import Scope
+from taipy.common.config.exceptions.exceptions import InvalidConfigurationId
+from taipy.core.common._utils import _normalize_path
+from taipy.core.data._data_manager import _DataManager
+from taipy.core.data._data_manager_factory import _DataManagerFactory
+from taipy.core.data.csv import CSVDataNode
+from taipy.core.data.data_node_id import DataNodeId
+from taipy.core.exceptions.exceptions import InvalidExposedType
+from taipy.core.reason import NoFileToDownload, NotAFile
 
 
 @pytest.fixture(scope="function", autouse=True)
@@ -39,19 +43,20 @@ def cleanup():
         os.remove(path)
 
 
+@dataclasses.dataclass
 class MyCustomObject:
-    def __init__(self, id, integer, text):
-        self.id = id
-        self.integer = integer
-        self.text = text
+    id: int
+    integer: int
+    text: str
 
 
 class TestCSVDataNode:
     def test_create(self):
-        path = "data/node/path"
-        dn = CSVDataNode(
-            "foo_bar", Scope.SCENARIO, properties={"path": path, "has_header": False, "name": "super name"}
+        default_path = "data/node/path"
+        csv_dn_config = Config.configure_csv_data_node(
+            id="foo_bar", default_path=default_path, has_header=False, name="super name"
         )
+        dn = _DataManagerFactory._build_manager()._create_and_set(csv_dn_config, None, None)
         assert isinstance(dn, CSVDataNode)
         assert dn.storage_type() == "csv"
         assert dn.config_id == "foo_bar"
@@ -62,14 +67,31 @@ class TestCSVDataNode:
         assert dn.last_edit_date is None
         assert dn.job_ids == []
         assert not dn.is_ready_for_reading
-        assert dn.path == path
-        assert dn.has_header is False
-        assert dn.exposed_type == "pandas"
+        assert dn.path == default_path
+        assert dn.properties["has_header"] is False
+        assert dn.properties["exposed_type"] == "pandas"
+
+        csv_dn_config = Config.configure_csv_data_node(
+            id="foo", default_path=default_path, has_header=True, exposed_type=MyCustomObject
+        )
+        dn = _DataManagerFactory._build_manager()._create_and_set(csv_dn_config, None, None)
+        assert dn.storage_type() == "csv"
+        assert dn.config_id == "foo"
+        assert dn.properties["has_header"] is True
+        assert dn.properties["exposed_type"] == MyCustomObject
 
         with pytest.raises(InvalidConfigurationId):
-            dn = CSVDataNode(
-                "foo bar", Scope.SCENARIO, properties={"path": path, "has_header": False, "name": "super name"}
+            CSVDataNode(
+                "foo bar", Scope.SCENARIO, properties={"path": default_path, "has_header": False, "name": "super name"}
             )
+
+    def test_modin_deprecated_in_favor_of_pandas(self):
+        path = os.path.join(pathlib.Path(__file__).parent.resolve(), "data_sample/example.csv")
+        # Create CSVDataNode with modin exposed_type
+        csv_data_node_as_modin = CSVDataNode("bar", Scope.SCENARIO, properties={"path": path, "exposed_type": "modin"})
+        assert csv_data_node_as_modin.properties["exposed_type"] == "pandas"
+        data_modin = csv_data_node_as_modin.read()
+        assert isinstance(data_modin, pd.DataFrame)
 
     def test_get_user_properties(self, csv_file):
         dn_1 = CSVDataNode("dn_1", Scope.SCENARIO, properties={"path": "data/node/path"})
@@ -108,219 +130,9 @@ class TestCSVDataNode:
         ],
     )
     def test_create_with_default_data(self, properties, exists):
-        dn = CSVDataNode("foo", Scope.SCENARIO, DataNodeId("dn_id"), properties=properties)
+        dn = CSVDataNode("foo", Scope.SCENARIO, DataNodeId(f"dn_id_{uuid.uuid4()}"), properties=properties)
+        assert dn.path == f"{Config.core.storage_folder}csvs/{dn.id}.csv"
         assert os.path.exists(dn.path) is exists
-
-    def test_read_with_header(self):
-        not_existing_csv = CSVDataNode("foo", Scope.SCENARIO, properties={"path": "WRONG.csv", "has_header": True})
-        with pytest.raises(NoData):
-            assert not_existing_csv.read() is None
-            not_existing_csv.read_or_raise()
-
-        path = os.path.join(pathlib.Path(__file__).parent.resolve(), "data_sample/example.csv")
-        # # Create CSVDataNode without exposed_type (Default is pandas.DataFrame)
-        csv_data_node_as_pandas = CSVDataNode("bar", Scope.SCENARIO, properties={"path": path})
-        data_pandas = csv_data_node_as_pandas.read()
-        assert isinstance(data_pandas, pd.DataFrame)
-        assert len(data_pandas) == 10
-        assert np.array_equal(data_pandas.to_numpy(), pd.read_csv(path).to_numpy())
-
-        # Create CSVDataNode with modin exposed_type
-        csv_data_node_as_modin = CSVDataNode("bar", Scope.SCENARIO, properties={"path": path, "exposed_type": "modin"})
-        data_modin = csv_data_node_as_modin.read()
-        assert isinstance(data_modin, modin_pd.DataFrame)
-        assert len(data_modin) == 10
-        assert np.array_equal(data_modin.to_numpy(), modin_pd.read_csv(path).to_numpy())
-
-        # Create CSVDataNode with numpy exposed_type
-        csv_data_node_as_numpy = CSVDataNode(
-            "bar", Scope.SCENARIO, properties={"path": path, "has_header": True, "exposed_type": "numpy"}
-        )
-        data_numpy = csv_data_node_as_numpy.read()
-        assert isinstance(data_numpy, np.ndarray)
-        assert len(data_numpy) == 10
-        assert np.array_equal(data_numpy, pd.read_csv(path).to_numpy())
-
-        # Create the same CSVDataNode but with custom exposed_type
-        csv_data_node_as_custom_object = CSVDataNode(
-            "bar", Scope.SCENARIO, properties={"path": path, "exposed_type": MyCustomObject}
-        )
-        data_custom = csv_data_node_as_custom_object.read()
-        assert isinstance(data_custom, list)
-        assert len(data_custom) == 10
-
-        for (index, row_pandas), row_custom in zip(data_pandas.iterrows(), data_custom):
-            assert isinstance(row_custom, MyCustomObject)
-            assert row_pandas["id"] == row_custom.id
-            assert str(row_pandas["integer"]) == row_custom.integer
-            assert row_pandas["text"] == row_custom.text
-
-    def test_read_without_header(self):
-        not_existing_csv = CSVDataNode("foo", Scope.SCENARIO, properties={"path": "WRONG.csv", "has_header": False})
-        with pytest.raises(NoData):
-            assert not_existing_csv.read() is None
-            not_existing_csv.read_or_raise()
-
-        path = os.path.join(pathlib.Path(__file__).parent.resolve(), "data_sample/example.csv")
-        # Create CSVDataNode without exposed_type (Default is pandas.DataFrame)
-        csv_data_node_as_pandas = CSVDataNode("bar", Scope.SCENARIO, properties={"path": path, "has_header": False})
-        data_pandas = csv_data_node_as_pandas.read()
-        assert isinstance(data_pandas, pd.DataFrame)
-        assert len(data_pandas) == 11
-        assert np.array_equal(data_pandas.to_numpy(), pd.read_csv(path, header=None).to_numpy())
-
-        # Create CSVDataNode with modin exposed_type
-        csv_data_node_as_modin = CSVDataNode(
-            "baz", Scope.SCENARIO, properties={"path": path, "has_header": False, "exposed_type": "modin"}
-        )
-        data_modin = csv_data_node_as_modin.read()
-        assert isinstance(data_modin, modin_pd.DataFrame)
-        assert len(data_modin) == 11
-        assert np.array_equal(data_modin.to_numpy(), modin_pd.read_csv(path, header=None).to_numpy())
-
-        # Create CSVDataNode with numpy exposed_type
-        csv_data_node_as_numpy = CSVDataNode(
-            "qux", Scope.SCENARIO, properties={"path": path, "has_header": False, "exposed_type": "numpy"}
-        )
-        data_numpy = csv_data_node_as_numpy.read()
-        assert isinstance(data_numpy, np.ndarray)
-        assert len(data_numpy) == 11
-        assert np.array_equal(data_numpy, pd.read_csv(path, header=None).to_numpy())
-
-        # Create the same CSVDataNode but with custom exposed_type
-        csv_data_node_as_custom_object = CSVDataNode(
-            "quux", Scope.SCENARIO, properties={"path": path, "has_header": False, "exposed_type": MyCustomObject}
-        )
-        data_custom = csv_data_node_as_custom_object.read()
-        assert isinstance(data_custom, list)
-        assert len(data_custom) == 11
-
-        for (index, row_pandas), row_custom in zip(data_pandas.iterrows(), data_custom):
-            assert isinstance(row_custom, MyCustomObject)
-            assert row_pandas[0] == row_custom.id
-            assert str(row_pandas[1]) == row_custom.integer
-            assert row_pandas[2] == row_custom.text
-
-    @pytest.mark.parametrize(
-        "content",
-        [
-            ([{"a": 11, "b": 22, "c": 33}, {"a": 44, "b": 55, "c": 66}]),
-            (pd.DataFrame([{"a": 11, "b": 22, "c": 33}, {"a": 44, "b": 55, "c": 66}])),
-            ([[11, 22, 33], [44, 55, 66]]),
-        ],
-    )
-    def test_append(self, csv_file, default_data_frame, content):
-        csv_dn = CSVDataNode("foo", Scope.SCENARIO, properties={"path": csv_file})
-        assert_frame_equal(csv_dn.read(), default_data_frame)
-
-        csv_dn.append(content)
-        assert_frame_equal(
-            csv_dn.read(),
-            pd.concat([default_data_frame, pd.DataFrame(content, columns=["a", "b", "c"])]).reset_index(drop=True),
-        )
-
-    @pytest.mark.parametrize(
-        "content",
-        [
-            ([{"a": 11, "b": 22, "c": 33}, {"a": 44, "b": 55, "c": 66}]),
-            (pd.DataFrame([{"a": 11, "b": 22, "c": 33}, {"a": 44, "b": 55, "c": 66}])),
-            ([[11, 22, 33], [44, 55, 66]]),
-        ],
-    )
-    def test_append_modin(self, csv_file, default_data_frame, content):
-        csv_dn = CSVDataNode("foo", Scope.SCENARIO, properties={"path": csv_file, "exposed_type": "modin"})
-        df_equals(csv_dn.read(), modin_pd.DataFrame(default_data_frame))
-
-        csv_dn.append(content)
-        df_equals(
-            csv_dn.read(),
-            modin_pd.concat([default_data_frame, pd.DataFrame(content, columns=["a", "b", "c"])]).reset_index(
-                drop=True
-            ),
-        )
-
-    @pytest.mark.parametrize(
-        "content,columns",
-        [
-            ([{"a": 11, "b": 22, "c": 33}, {"a": 44, "b": 55, "c": 66}], None),
-            ([[11, 22, 33], [44, 55, 66]], None),
-            ([[11, 22, 33], [44, 55, 66]], ["e", "f", "g"]),
-        ],
-    )
-    def test_write(self, csv_file, default_data_frame, content, columns):
-        csv_dn = CSVDataNode("foo", Scope.SCENARIO, properties={"path": csv_file})
-        assert np.array_equal(csv_dn.read().values, default_data_frame.values)
-        if not columns:
-            csv_dn.write(content)
-            df = pd.DataFrame(content)
-        else:
-            csv_dn.write_with_column_names(content, columns)
-            df = pd.DataFrame(content, columns=columns)
-        assert np.array_equal(csv_dn.read().values, df.values)
-
-        csv_dn.write(None)
-        assert len(csv_dn.read()) == 0
-
-    def test_write_with_different_encoding(self, csv_file):
-        data = pd.DataFrame([{"≥a": 1, "b": 2}])
-
-        utf8_dn = CSVDataNode("utf8_dn", Scope.SCENARIO, properties={"default_path": csv_file})
-        utf16_dn = CSVDataNode("utf16_dn", Scope.SCENARIO, properties={"default_path": csv_file, "encoding": "utf-16"})
-
-        # If a file is written with utf-8 encoding, it can only be read with utf-8, not utf-16 encoding
-        utf8_dn.write(data)
-        assert np.array_equal(utf8_dn.read(), data)
-        with pytest.raises(UnicodeError):
-            utf16_dn.read()
-
-        # If a file is written with utf-16 encoding, it can only be read with utf-16, not utf-8 encoding
-        utf16_dn.write(data)
-        assert np.array_equal(utf16_dn.read(), data)
-        with pytest.raises(UnicodeError):
-            utf8_dn.read()
-
-    @pytest.mark.parametrize(
-        "content,columns",
-        [
-            ([{"a": 11, "b": 22, "c": 33}, {"a": 44, "b": 55, "c": 66}], None),
-            ([[11, 22, 33], [44, 55, 66]], None),
-            ([[11, 22, 33], [44, 55, 66]], ["e", "f", "g"]),
-        ],
-    )
-    def test_write_modin(self, csv_file, default_data_frame, content, columns):
-        default_data_frame = modin_pd.DataFrame(default_data_frame)
-        csv_dn = CSVDataNode("foo", Scope.SCENARIO, properties={"path": csv_file, "exposed_type": "modin"})
-        assert np.array_equal(csv_dn.read().values, default_data_frame.values)
-        if not columns:
-            csv_dn.write(content)
-            df = pd.DataFrame(content)
-        else:
-            csv_dn.write_with_column_names(content, columns)
-            df = pd.DataFrame(content, columns=columns)
-        assert np.array_equal(csv_dn.read().values, df.values)
-
-        csv_dn.write(None)
-        assert len(csv_dn.read()) == 0
-
-    def test_write_modin_with_different_encoding(self, csv_file):
-        data = pd.DataFrame([{"≥a": 1, "b": 2}])
-
-        utf8_dn = CSVDataNode("utf8_dn", Scope.SCENARIO, properties={"path": csv_file, "exposed_type": "modin"})
-        utf16_dn = CSVDataNode(
-            "utf16_dn", Scope.SCENARIO, properties={"path": csv_file, "exposed_type": "modin", "encoding": "utf-16"}
-        )
-
-        # If a file is written with utf-8 encoding, it can only be read with utf-8, not utf-16 encoding
-        utf8_dn.write(data)
-        assert np.array_equal(utf8_dn.read(), data)
-        with pytest.raises(UnicodeError):
-            utf16_dn.read()
-
-        # If a file is written with utf-16 encoding, it can only be read with utf-16, not utf-8 encoding
-        utf16_dn.write(data)
-        assert np.array_equal(utf16_dn.read(), data)
-        with pytest.raises(UnicodeError):
-            utf8_dn.read()
 
     def test_set_path(self):
         dn = CSVDataNode("foo", Scope.SCENARIO, properties={"default_path": "foo.csv"})
@@ -345,139 +157,57 @@ class TestCSVDataNode:
         dn = CSVDataNode("foo", Scope.SCENARIO, properties={"path": path, "exposed_type": "pandas"})
         assert isinstance(dn.read(), pd.DataFrame)
 
-    def test_filter_pandas_exposed_type(self, csv_file):
-        dn = CSVDataNode("foo", Scope.SCENARIO, properties={"path": csv_file, "exposed_type": "pandas"})
-        dn.write(
-            [
-                {"foo": 1, "bar": 1},
-                {"foo": 1, "bar": 2},
-                {"foo": 1},
-                {"foo": 2, "bar": 2},
-                {"bar": 2},
-            ]
-        )
+    def test_pandas_dataframe_exposed_type(self):
+        path = os.path.join(pathlib.Path(__file__).parent.resolve(), "data_sample/example.csv")
+        dn = CSVDataNode("foo", Scope.SCENARIO, properties={"path": path, "exposed_type": pd.DataFrame})
+        assert isinstance(dn.read(), pd.DataFrame)
 
-        # Test datanode indexing and slicing
-        assert dn["foo"].equals(pd.Series([1, 1, 1, 2, None]))
-        assert dn["bar"].equals(pd.Series([1, 2, None, 2, 2]))
-        assert dn[:2].equals(pd.DataFrame([{"foo": 1.0, "bar": 1.0}, {"foo": 1.0, "bar": 2.0}]))
+    def test_pandas_dataframe_exposed_type_a(self):
+        import pandas
 
-        # Test filter data
-        filtered_by_filter_method = dn.filter(("foo", 1, Operator.EQUAL))
-        filtered_by_indexing = dn[dn["foo"] == 1]
-        expected_data = pd.DataFrame([{"foo": 1.0, "bar": 1.0}, {"foo": 1.0, "bar": 2.0}, {"foo": 1.0}])
-        assert_frame_equal(filtered_by_filter_method.reset_index(drop=True), expected_data)
-        assert_frame_equal(filtered_by_indexing.reset_index(drop=True), expected_data)
+        path = os.path.join(pathlib.Path(__file__).parent.resolve(), "data_sample/example.csv")
+        dn = CSVDataNode("foo", Scope.SCENARIO, properties={"path": path, "exposed_type": pandas.DataFrame})
+        assert isinstance(dn.read(), pandas.DataFrame)
 
-        filtered_by_filter_method = dn.filter(("foo", 1, Operator.NOT_EQUAL))
-        filtered_by_indexing = dn[dn["foo"] != 1]
-        expected_data = pd.DataFrame([{"foo": 2.0, "bar": 2.0}, {"bar": 2.0}])
-        assert_frame_equal(filtered_by_filter_method.reset_index(drop=True), expected_data)
-        assert_frame_equal(filtered_by_indexing.reset_index(drop=True), expected_data)
+    def test_pandas_dataframe_exposed_type_b(self):
+        from pandas import DataFrame
 
-        filtered_by_filter_method = dn.filter(("bar", 2, Operator.EQUAL))
-        filtered_by_indexing = dn[dn["bar"] == 2]
-        expected_data = pd.DataFrame([{"foo": 1.0, "bar": 2.0}, {"foo": 2.0, "bar": 2.0}, {"bar": 2.0}])
-        assert_frame_equal(filtered_by_filter_method.reset_index(drop=True), expected_data)
-        assert_frame_equal(filtered_by_indexing.reset_index(drop=True), expected_data)
+        path = os.path.join(pathlib.Path(__file__).parent.resolve(), "data_sample/example.csv")
+        dn = CSVDataNode("foo", Scope.SCENARIO, properties={"path": path, "exposed_type": DataFrame})
+        assert isinstance(dn.read(), DataFrame)
 
-        filtered_by_filter_method = dn.filter([("bar", 1, Operator.EQUAL), ("bar", 2, Operator.EQUAL)], JoinOperator.OR)
-        filtered_by_indexing = dn[(dn["bar"] == 1) | (dn["bar"] == 2)]
-        expected_data = pd.DataFrame(
-            [
-                {"foo": 1.0, "bar": 1.0},
-                {"foo": 1.0, "bar": 2.0},
-                {"foo": 2.0, "bar": 2.0},
-                {"bar": 2.0},
-            ]
-        )
-        assert_frame_equal(filtered_by_filter_method.reset_index(drop=True), expected_data)
-        assert_frame_equal(filtered_by_indexing.reset_index(drop=True), expected_data)
+    def test_pandas_dataframe_exposed_type_c(self):
+        from pandas import DataFrame as DF
 
-    def test_filter_modin_exposed_type(self, csv_file):
-        dn = CSVDataNode("foo", Scope.SCENARIO, properties={"path": csv_file, "exposed_type": "modin"})
-        dn.write(
-            [
-                {"foo": 1, "bar": 1},
-                {"foo": 1, "bar": 2},
-                {"foo": 1},
-                {"foo": 2, "bar": 2},
-                {"bar": 2},
-            ]
-        )
+        path = os.path.join(pathlib.Path(__file__).parent.resolve(), "data_sample/example.csv")
+        dn = CSVDataNode("foo", Scope.SCENARIO, properties={"path": path, "exposed_type": DF})
+        assert isinstance(dn.read(), DF)
 
-        # Test datanode indexing and slicing
-        assert dn["foo"].equals(modin_pd.Series([1, 1, 1, 2, None]))
-        assert dn["bar"].equals(modin_pd.Series([1, 2, None, 2, 2]))
-        assert dn[:2].equals(modin_pd.DataFrame([{"foo": 1.0, "bar": 1.0}, {"foo": 1.0, "bar": 2.0}]))
+    def test_numpy_ndarray_exposed_type(self):
+        path = os.path.join(pathlib.Path(__file__).parent.resolve(), "data_sample/example.csv")
+        dn = CSVDataNode("foo", Scope.SCENARIO, properties={"path": path, "exposed_type": np.ndarray})
+        assert isinstance(dn.read(), np.ndarray)
 
-        # Test filter data
-        filtered_by_filter_method = dn.filter(("foo", 1, Operator.EQUAL))
-        filtered_by_indexing = dn[dn["foo"] == 1]
-        expected_data = modin_pd.DataFrame([{"foo": 1.0, "bar": 1.0}, {"foo": 1.0, "bar": 2.0}, {"foo": 1.0}])
-        df_equals(filtered_by_filter_method.reset_index(drop=True), expected_data)
-        df_equals(filtered_by_indexing.reset_index(drop=True), expected_data)
+    def test_numpy_ndarray_exposed_type_a(self):
+        import numpy
 
-        filtered_by_filter_method = dn.filter(("foo", 1, Operator.NOT_EQUAL))
-        filtered_by_indexing = dn[dn["foo"] != 1]
-        expected_data = modin_pd.DataFrame([{"foo": 2.0, "bar": 2.0}, {"bar": 2.0}])
-        df_equals(filtered_by_filter_method.reset_index(drop=True), expected_data)
-        df_equals(filtered_by_indexing.reset_index(drop=True), expected_data)
+        path = os.path.join(pathlib.Path(__file__).parent.resolve(), "data_sample/example.csv")
+        dn = CSVDataNode("foo", Scope.SCENARIO, properties={"path": path, "exposed_type": numpy.ndarray})
+        assert isinstance(dn.read(), numpy.ndarray)
 
-        filtered_by_filter_method = dn.filter(("bar", 2, Operator.EQUAL))
-        filtered_by_indexing = dn[dn["bar"] == 2]
-        expected_data = modin_pd.DataFrame([{"foo": 1.0, "bar": 2.0}, {"foo": 2.0, "bar": 2.0}, {"bar": 2.0}])
-        df_equals(filtered_by_filter_method.reset_index(drop=True), expected_data)
-        df_equals(filtered_by_indexing.reset_index(drop=True), expected_data)
+    def test_numpy_ndarray_exposed_type_b(self):
+        from numpy import ndarray
 
-        filtered_by_filter_method = dn.filter([("bar", 1, Operator.EQUAL), ("bar", 2, Operator.EQUAL)], JoinOperator.OR)
-        filtered_by_indexing = dn[(dn["bar"] == 1) | (dn["bar"] == 2)]
-        expected_data = modin_pd.DataFrame(
-            [
-                {"foo": 1.0, "bar": 1.0},
-                {"foo": 1.0, "bar": 2.0},
-                {"foo": 2.0, "bar": 2.0},
-                {"bar": 2.0},
-            ]
-        )
-        df_equals(filtered_by_filter_method.reset_index(drop=True), expected_data)
-        df_equals(filtered_by_indexing.reset_index(drop=True), expected_data)
+        path = os.path.join(pathlib.Path(__file__).parent.resolve(), "data_sample/example.csv")
+        dn = CSVDataNode("foo", Scope.SCENARIO, properties={"path": path, "exposed_type": ndarray})
+        assert isinstance(dn.read(), ndarray)
 
-    def test_filter_numpy_exposed_type(self, csv_file):
-        dn = CSVDataNode("foo", Scope.SCENARIO, properties={"path": csv_file, "exposed_type": "numpy"})
-        dn.write(
-            [
-                [1, 1],
-                [1, 2],
-                [1, 3],
-                [2, 1],
-                [2, 2],
-                [2, 3],
-            ]
-        )
+    def test_numpy_ndarray_exposed_type_c(self):
+        from numpy import ndarray as nd_array
 
-        # Test datanode indexing and slicing
-        assert np.array_equal(dn[0], np.array([1, 1]))
-        assert np.array_equal(dn[1], np.array([1, 2]))
-        assert np.array_equal(dn[:3], np.array([[1, 1], [1, 2], [1, 3]]))
-        assert np.array_equal(dn[:, 0], np.array([1, 1, 1, 2, 2, 2]))
-        assert np.array_equal(dn[1:4, :1], np.array([[1], [1], [2]]))
-
-        # Test filter data
-        assert np.array_equal(dn.filter((0, 1, Operator.EQUAL)), np.array([[1, 1], [1, 2], [1, 3]]))
-        assert np.array_equal(dn[dn[:, 0] == 1], np.array([[1, 1], [1, 2], [1, 3]]))
-
-        assert np.array_equal(dn.filter((0, 1, Operator.NOT_EQUAL)), np.array([[2, 1], [2, 2], [2, 3]]))
-        assert np.array_equal(dn[dn[:, 0] != 1], np.array([[2, 1], [2, 2], [2, 3]]))
-
-        assert np.array_equal(dn.filter((1, 2, Operator.EQUAL)), np.array([[1, 2], [2, 2]]))
-        assert np.array_equal(dn[dn[:, 1] == 2], np.array([[1, 2], [2, 2]]))
-
-        assert np.array_equal(
-            dn.filter([(1, 1, Operator.EQUAL), (1, 2, Operator.EQUAL)], JoinOperator.OR),
-            np.array([[1, 1], [1, 2], [2, 1], [2, 2]]),
-        )
-        assert np.array_equal(dn[(dn[:, 1] == 1) | (dn[:, 1] == 2)], np.array([[1, 1], [1, 2], [2, 1], [2, 2]]))
+        path = os.path.join(pathlib.Path(__file__).parent.resolve(), "data_sample/example.csv")
+        dn = CSVDataNode("foo", Scope.SCENARIO, properties={"path": path, "exposed_type": nd_array})
+        assert isinstance(dn.read(), nd_array)
 
     def test_raise_error_invalid_exposed_type(self):
         path = os.path.join(pathlib.Path(__file__).parent.resolve(), "data_sample/example.csv")
@@ -505,3 +235,197 @@ class TestCSVDataNode:
         dn.write(pd.DataFrame([7, 8, 9]))
         assert new_edit_date < dn.last_edit_date
         os.unlink(temp_file_path)
+
+    def test_migrate_to_new_path(self, tmp_path):
+        _base_path = os.path.join(tmp_path, ".data")
+        path = os.path.join(_base_path, "test.csv")
+        # create a file on old path
+        os.mkdir(_base_path)
+        with open(path, "w"):
+            pass
+
+        dn = CSVDataNode("foo", Scope.SCENARIO, properties={"path": path, "exposed_type": "pandas"})
+
+        assert ".data" not in dn.path
+        assert os.path.exists(dn.path)
+
+    def test_is_downloadable(self):
+        path = os.path.join(pathlib.Path(__file__).parent.resolve(), "data_sample/example.csv")
+        dn = CSVDataNode("foo", Scope.SCENARIO, properties={"path": path, "exposed_type": "pandas"})
+        reasons = dn.is_downloadable()
+        assert reasons
+        assert reasons.reasons == ""
+
+    def test_is_not_downloadable_no_file(self):
+        path = os.path.join(pathlib.Path(__file__).parent.resolve(), "data_sample/wrong_example.csv")
+        dn = CSVDataNode("foo", Scope.SCENARIO, properties={"path": path, "exposed_type": "pandas"})
+        reasons = dn.is_downloadable()
+        assert not reasons
+        assert len(reasons._reasons) == 1
+        assert str(NoFileToDownload(_normalize_path(path), dn.id)) in reasons.reasons
+
+    def test_is_not_downloadable_not_a_file(self):
+        path = os.path.join(pathlib.Path(__file__).parent.resolve(), "data_sample")
+        dn = CSVDataNode("foo", Scope.SCENARIO, properties={"path": path, "exposed_type": "pandas"})
+        reasons = dn.is_downloadable()
+        assert not reasons
+        assert len(reasons._reasons) == 1
+        assert str(NotAFile(_normalize_path(path), dn.id)) in reasons.reasons
+
+    def test_get_downloadable_path(self):
+        path = os.path.join(pathlib.Path(__file__).parent.resolve(), "data_sample/example.csv")
+        dn = CSVDataNode("foo", Scope.SCENARIO, properties={"path": path, "exposed_type": "pandas"})
+        assert re.split(r"[\\/]", dn._get_downloadable_path()) == re.split(r"[\\/]", path)
+
+    def test_get_downloadable_path_with_not_existing_file(self):
+        dn = CSVDataNode("foo", Scope.SCENARIO, properties={"path": "NOT_EXISTING.csv", "exposed_type": "pandas"})
+        assert dn._get_downloadable_path() == ""
+
+    def is_uploadable(self):
+        path = os.path.join(pathlib.Path(__file__).parent.resolve(), "data_sample/example.csv")
+        dn = CSVDataNode("foo", Scope.SCENARIO, properties={"path": path, "exposed_type": "pandas"})
+        assert dn.is_uploadable()
+
+    def test_upload(self, csv_file, tmpdir_factory):
+        old_csv_path = tmpdir_factory.mktemp("data").join("df.csv").strpath
+        old_data = pd.DataFrame([{"a": 0, "b": 1, "c": 2}, {"a": 3, "b": 4, "c": 5}])
+
+        dn = CSVDataNode("foo", Scope.SCENARIO, properties={"path": old_csv_path, "exposed_type": "pandas"})
+        dn.write(old_data)
+        old_last_edit_date = dn.last_edit_date
+
+        upload_content = pd.read_csv(csv_file)
+
+        with freezegun.freeze_time(old_last_edit_date + timedelta(seconds=1)):
+            dn._upload(csv_file)
+
+        assert_frame_equal(dn.read(), upload_content)  # The content of the dn should change to the uploaded content
+        assert dn.last_edit_date > old_last_edit_date
+        assert dn.path == _normalize_path(old_csv_path)  # The path of the dn should not change
+
+    def test_upload_fails_if_data_node_locked(self, csv_file, tmpdir_factory):
+        old_csv_path = tmpdir_factory.mktemp("data").join("df.csv").strpath
+        old_data = pd.DataFrame([{"a": 0, "b": 1, "c": 2}, {"a": 3, "b": 4, "c": 5}])
+
+        dn = CSVDataNode("foo", Scope.SCENARIO, properties={"path": old_csv_path, "exposed_type": "pandas"})
+        dn.write(old_data)
+        upload_content = pd.read_csv(csv_file)
+        dn.lock_edit("editor_id_1")
+
+        reasons = dn._upload(csv_file, editor_id="editor_id_2")
+        assert not reasons
+
+        assert dn._upload(csv_file, editor_id="editor_id_1")
+
+        assert_frame_equal(dn.read(), upload_content)  # The content of the dn should change to the uploaded content
+
+    def test_upload_with_upload_check_with_exception(self, csv_file, tmpdir_factory, caplog):
+        old_csv_path = tmpdir_factory.mktemp("data").join("df.csv").strpath
+        dn = CSVDataNode("foo", Scope.SCENARIO, properties={"path": old_csv_path, "exposed_type": "pandas"})
+
+        def check_with_exception(upload_path, upload_data):
+            raise Exception("An error with check_with_exception")
+
+        reasons = dn._upload(csv_file, upload_checker=check_with_exception)
+        assert bool(reasons) is False
+        assert (
+            f"Error with the upload checker `check_with_exception` "
+            f"while checking `df.csv` file for upload to the data "
+            f"node `{dn.id}`:" in caplog.text
+        )
+
+    def test_upload_with_upload_check_pandas(self, csv_file, tmpdir_factory):
+        old_csv_path = tmpdir_factory.mktemp("data").join("df.csv").strpath
+        old_data = pd.DataFrame([{"a": 0, "b": 1, "c": 2}, {"a": 3, "b": 4, "c": 5}])
+
+        dn = CSVDataNode("foo", Scope.SCENARIO, properties={"path": old_csv_path, "exposed_type": "pandas"})
+        dn.write(old_data)
+        old_last_edit_date = dn.last_edit_date
+
+        def check_data_column(upload_path, upload_data):
+            return upload_path.endswith(".csv") and upload_data.columns.tolist() == ["a", "b", "c"]
+
+        not_exists_csv_path = tmpdir_factory.mktemp("data").join("not_exists.csv").strpath
+        reasons = dn._upload(not_exists_csv_path, upload_checker=check_data_column)
+        assert bool(reasons) is False
+        assert (
+            str(list(reasons._reasons[dn.id])[0]) == "The uploaded file not_exists.csv can not be read,"
+            f' therefore is not a valid data file for data node "{dn.id}"'
+        )
+
+        not_csv_path = tmpdir_factory.mktemp("data").join("wrong_format_df.not_csv").strpath
+        old_data.to_csv(not_csv_path, index=False)
+        # The upload should fail when the file is not a csv
+        reasons = dn._upload(not_csv_path, upload_checker=check_data_column)
+        assert bool(reasons) is False
+        assert (
+            str(list(reasons._reasons[dn.id])[0])
+            == f'The uploaded file wrong_format_df.not_csv has invalid data for data node "{dn.id}"'
+        )
+
+        wrong_format_csv_path = tmpdir_factory.mktemp("data").join("wrong_format_df.csv").strpath
+        pd.DataFrame([{"a": 1, "b": 2, "d": 3}, {"a": 4, "b": 5, "d": 6}]).to_csv(wrong_format_csv_path, index=False)
+        # The upload should fail when check_data_column() return False
+        reasons = dn._upload(wrong_format_csv_path, upload_checker=check_data_column)
+        assert bool(reasons) is False
+        assert (
+            str(list(reasons._reasons[dn.id])[0])
+            == f'The uploaded file wrong_format_df.csv has invalid data for data node "{dn.id}"'
+        )
+
+        assert_frame_equal(dn.read(), old_data)  # The content of the dn should not change when upload fails
+        assert dn.last_edit_date == old_last_edit_date  # The last edit date should not change when upload fails
+        assert dn.path == _normalize_path(old_csv_path)  # The path of the dn should not change
+
+        # The upload should succeed when check_data_column() return True
+        assert dn._upload(csv_file, upload_checker=check_data_column)
+
+    def test_upload_with_upload_check_numpy(self, tmpdir_factory):
+        old_csv_path = tmpdir_factory.mktemp("data").join("df.csv").strpath
+        old_data = np.array([[1, 2, 3], [4, 5, 6]])
+
+        new_csv_path = tmpdir_factory.mktemp("data").join("new_upload_data.csv").strpath
+        new_data = np.array([[1, 2, 3], [4, 5, 6]])
+        pd.DataFrame(new_data).to_csv(new_csv_path, index=False)
+
+        dn = CSVDataNode("foo", Scope.SCENARIO, properties={"path": old_csv_path, "exposed_type": "numpy"})
+        dn.write(old_data)
+        old_last_edit_date = dn.last_edit_date
+
+        def check_data_is_positive(upload_path, upload_data):
+            return upload_path.endswith(".csv") and np.all(upload_data > 0)
+
+        not_exists_csv_path = tmpdir_factory.mktemp("data").join("not_exists.csv").strpath
+        reasons = dn._upload(not_exists_csv_path, upload_checker=check_data_is_positive)
+        assert bool(reasons) is False
+        assert (
+            str(list(reasons._reasons[dn.id])[0]) == "The uploaded file not_exists.csv can not be read"
+            f', therefore is not a valid data file for data node "{dn.id}"'
+        )
+
+        not_csv_path = tmpdir_factory.mktemp("data").join("wrong_format_df.not_csv").strpath
+        pd.DataFrame(old_data).to_csv(not_csv_path, index=False)
+        # The upload should fail when the file is not a csv
+        reasons = dn._upload(not_csv_path, upload_checker=check_data_is_positive)
+        assert bool(reasons) is False
+        assert (
+            str(list(reasons._reasons[dn.id])[0])
+            == f'The uploaded file wrong_format_df.not_csv has invalid data for data node "{dn.id}"'
+        )
+
+        wrong_format_csv_path = tmpdir_factory.mktemp("data").join("wrong_format_df.csv").strpath
+        pd.DataFrame(np.array([[-1, 2, 3], [-4, -5, -6]])).to_csv(wrong_format_csv_path, index=False)
+        # The upload should fail when check_data_is_positive() return False
+        reasons = dn._upload(wrong_format_csv_path, upload_checker=check_data_is_positive)
+        assert bool(reasons) is False
+        assert (
+            str(list(reasons._reasons[dn.id])[0])
+            == f'The uploaded file wrong_format_df.csv has invalid data for data node "{dn.id}"'
+        )
+
+        np.array_equal(dn.read(), old_data)  # The content of the dn should not change when upload fails
+        assert dn.last_edit_date == old_last_edit_date  # The last edit date should not change when upload fails
+        assert dn.path == _normalize_path(old_csv_path)  # The path of the dn should not change
+
+        # The upload should succeed when check_data_is_positive() return True
+        assert dn._upload(new_csv_path, upload_checker=check_data_is_positive)

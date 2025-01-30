@@ -26,15 +26,15 @@ The Extension API is located by the 'taipy-gui' module.
 
 In order to import items from this module, you have to install it, using `npm`.
 The most simple way to install the Taipy GUI Extension module is:
-```
-npm i <TAIPY_GUI_DIR>/webapp
+```bash
+npm i <TAIPY_DIR>/taipy/gui/webapp
 ```
 
-Where *<TAIPY_GUI_DIR>* represents the directory where, in the development machine's
+Where *<TAIPY_DIR>* represents the directory where, in the development machine's
 filesystem, the Taipy GUI Python package has been installed.
 
 When the package is installed, your JavaScript code can import items from it:
-```
+```javascript
 import { ... } from "taipy-gui";
 ```
 
@@ -49,7 +49,7 @@ has the name that the Python script has created it with, the equivalent to this 
 on the front-end might have a different name, for technical reasons.
 
 Note that controls that hold dynamic properties have two generated properties called
-*updateVars* and *updateVarName*, that are used to ensure a proper update of variable changes. The function [getUpdateVar()](modules/#getupdatevar) uses that property.
+*updateVars* and *updateVarName*, that are used to ensure a proper update of variable changes. The function [getUpdateVar()](functions/getUpdateVar.md) uses that property.
 
 Components dynamic properties are tied to the State: all updates of the State will
 automatically be propagated to the relevant components and the component is in charge
@@ -61,11 +61,10 @@ In order for the front-end to notify the backend of a change or query data, an `
 must be created (using the `create*Action()` functions) and dispatched to the React
 context:
 
-```
+```javascript
 const dispatch = useDispatch();
 ...
 const action = create*Action(...);
 ...
 dispatch(action);
 ```
-
